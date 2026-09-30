@@ -67,6 +67,11 @@ public final class PostgresSessionConnection: @unchecked Sendable {
     /// The backend process ID of this session (as in `pg_stat_activity.pid`).
     public let backendPID: Int32
 
+    /// The server this session is connected to (relevant with several configured hosts).
+    public var connectedHost: PostgresHost {
+        PostgresHost(host: wireConfiguration.unixSocketPath ?? wireConfiguration.host, port: wireConfiguration.port)
+    }
+
     /// Wrapper for the PostgresKit connection-level helpers (DDL builders, notifications, …).
     public let connection: PostgresConnection
 
@@ -99,9 +104,11 @@ public final class PostgresSessionConnection: @unchecked Sendable {
         keepAliveInterval: Duration? = .seconds(30),
         logger: Logger = .init(label: "postgres-kit.session")
     ) async throws -> PostgresSessionConnection {
-        let wireConfiguration = configuration.makeWireConfiguration()
         do {
-            let nioConnection = try await PostgresWireClient.openConnection(configuration: wireConfiguration, logger: logger)
+            let opened = try await PostgresWireClient.openSelectedConnection(configuration: configuration.makeWireConfiguration(), logger: logger)
+            let nioConnection = opened.connection
+            // Keep the resolved configuration: cancels must go to the same host with the same TLS mode.
+            let wireConfiguration = opened.configuration
             let pid: Int32
             do {
                 pid = try await Self.queryBackendPID(nioConnection, logger: logger)
@@ -132,6 +139,9 @@ public final class PostgresSessionConnection: @unchecked Sendable {
     /// Whether a statement is currently running (its rows have not been fully consumed).
     public var isQueryInFlight: Bool { state.withLockedValue { $0.queriesInFlight > 0 } }
 
+    /// Whether the connection closed while a transaction was open (the server rolled it back).
+    public var transactionWasLost: Bool { state.withLockedValue { $0.isClosed && $0.transactionLost } }
+
     // MARK: - Queries
 
     /// Run one statement and stream its rows.
@@ -146,22 +156,35 @@ public final class PostgresSessionConnection: @unchecked Sendable {
         return try await query(WireQuery(sql: sql, binds: bindings))
     }
 
-    private func query(_ query: WireQuery) async throws -> PostgresSessionRows {
+    private func query(_ query: WireQuery, allowFallback: Bool = true) async throws -> PostgresSessionRows {
         let effect = PostgresSQLSplitter.transactionEffect(of: query.sql)
+        let canFallBack = allowFallback && query.binds == nil && transactionStatus == .idle
         try beginQuery()
         let token = QueryToken(session: self, effect: effect)
         do {
             let rows = try await nioConnection.query(query.asPostgresQuery(), logger: logger)
-            return PostgresSessionRows(base: rows, token: token)
+            let sql = query.sql
+            let fallback: PostgresSessionRows.Fallback? = canFallBack
+                ? { @Sendable [weak self] error in await self?.textFallbackRows(for: sql, after: error) }
+                : nil
+            return PostgresSessionRows(base: rows, token: token, fallback: fallback)
         } catch {
             token.finish(error: error)
+            if canFallBack, let rows = await textFallbackRows(for: query.sql, after: error) { return rows }
             throw mapError(error)
         }
+    }
+
+    /// Rows of the text-cast rewrite when `error` is "no binary output function" (see `+TextFallback`).
+    fileprivate func textFallbackRows(for sql: String, after error: any Error) async -> PostgresSessionRows? {
+        guard Self.isMissingBinaryOutput(error), let rewritten = try? await textFallbackSQL(for: sql) else { return nil }
+        return try? await query(WireQuery(sql: rewritten), allowFallback: false)
     }
 
     /// Run one statement and collect all rows plus the command tag (`UPDATE 3`, `CREATE TABLE`, …).
     public func queryResult(_ sql: String) async throws -> WireQueryResult {
         let effect = PostgresSQLSplitter.transactionEffect(of: sql)
+        let canFallBack = transactionStatus == .idle
         try beginQuery()
         let token = QueryToken(session: self, effect: effect)
         do {
@@ -170,6 +193,9 @@ public final class PostgresSessionConnection: @unchecked Sendable {
             return result
         } catch {
             token.finish(error: error)
+            if canFallBack, Self.isMissingBinaryOutput(error), let rewritten = try? await textFallbackSQL(for: sql) {
+                return try await queryResult(rewritten)
+            }
             throw mapError(error)
         }
     }
@@ -209,8 +235,8 @@ public final class PostgresSessionConnection: @unchecked Sendable {
         let token = UUID().uuidString
         let status: PostgresTransactionStatus
         do {
-            _ = try await probe("SELECT set_config('postgres_wire.transaction_probe', '\(token)', true)")
-            let result = try await probe("SELECT current_setting('postgres_wire.transaction_probe', true)")
+            _ = try await probeQuery("SELECT set_config('postgres_wire.transaction_probe', '\(token)', true)")
+            let result = try await probeQuery("SELECT current_setting('postgres_wire.transaction_probe', true)")
             let value = try result.rows.first?.decode(String?.self) ?? nil
             status = value == token ? .inTransaction : .idle
         } catch let error as PostgresError where error.sqlState == "25P02" {
@@ -221,7 +247,7 @@ public final class PostgresSessionConnection: @unchecked Sendable {
     }
 
     /// Runs a statement without letting its outcome change the tracked transaction state.
-    private func probe(_ sql: String) async throws -> WireQueryResult {
+    func probeQuery(_ sql: String) async throws -> WireQueryResult {
         try beginQuery()
         defer { state.withLockedValue { $0.queriesInFlight = max(0, $0.queriesInFlight - 1) } }
         do {
@@ -323,7 +349,11 @@ public final class PostgresSessionConnection: @unchecked Sendable {
     private func mapError(_ error: any Error) -> any Error {
         let lost = state.withLockedValue { state -> Bool? in state.isClosed ? state.transactionLost : nil }
         if let lost { return PostgresSessionError.connectionClosed(transactionLost: lost) }
-        return PostgresError.from(error)
+        let mapped = PostgresError.from(error)
+        if Self.isMissingBinaryOutput(mapped), mapped.hint == nil {
+            return mapped.withHint(Self.binaryOutputHint)
+        }
+        return mapped
     }
 
     fileprivate func mapIterationError(_ error: any Error) -> any Error {
@@ -409,12 +439,14 @@ final class QueryToken: @unchecked Sendable {
 /// iterating update the session's transaction state.
 public struct PostgresSessionRows: AsyncSequence, Sendable {
     public typealias Element = PostgresRow
+    typealias Fallback = @Sendable (any Error) async -> PostgresSessionRows?
 
     let base: WireRowSequence
     let token: QueryToken
+    var fallback: Fallback? = nil
 
     public func makeAsyncIterator() -> AsyncIterator {
-        AsyncIterator(base: base.makeAsyncIterator(), token: token)
+        AsyncIterator(base: base.makeAsyncIterator(), token: token, fallback: fallback)
     }
 
     /// Collect all rows into memory.
@@ -426,7 +458,9 @@ public struct PostgresSessionRows: AsyncSequence, Sendable {
 
     public struct AsyncIterator: AsyncIteratorProtocol {
         var base: WireRowSequence.AsyncIterator
-        let token: QueryToken
+        var token: QueryToken
+        var fallback: Fallback?
+        var yieldedRow = false
 
         public mutating func next() async throws -> PostgresRow? {
             do {
@@ -434,10 +468,21 @@ public struct PostgresSessionRows: AsyncSequence, Sendable {
                     token.finish(error: nil)
                     return nil
                 }
+                yieldedRow = true
                 return row
             } catch {
                 token.finish(error: error)
-                throw token.mapError(error)
+                let reported = token.mapError(error)
+                // "No binary output function" arrives before the first row: retry with text casts.
+                if !yieldedRow, let fallback {
+                    self.fallback = nil
+                    if let rows = await fallback(error) {
+                        base = rows.base.makeAsyncIterator()
+                        token = rows.token
+                        return try await next()
+                    }
+                }
+                throw reported
             }
         }
     }

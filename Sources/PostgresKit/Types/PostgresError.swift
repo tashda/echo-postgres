@@ -21,6 +21,9 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
     /// The server's detail message, if any.
     public let detail: String?
 
+    /// The server's primary message exactly as sent (``message`` adds constraint, table and detail).
+    public let serverMessage: String?
+
     /// Position inside an internally generated query (for example inside a PL/pgSQL function), if any.
     public let internalPosition: Int?
 
@@ -46,6 +49,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
         self.hint = serverInfo?["hint"]
         self.detail = serverInfo?["detail"]
         self.internalPosition = serverInfo?["internalPosition"].flatMap(Int.init)
+        self.serverMessage = serverInfo?["message"]
     }
 
     /// Create from PSQLError with enhanced parsing.
@@ -59,6 +63,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
             self.hint = serverInfo[.hint]
             self.detail = serverInfo[.detail]
             self.internalPosition = serverInfo[.internalPosition].flatMap(Int.init)
+            self.serverMessage = serverInfo[.message]
 
             var detailedMessage = serverInfo[.message] ?? psqLError.localizedDescription
             if let constraintName = serverInfo[.constraintName] {
@@ -80,6 +85,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
                 "constraintName": serverInfo[.constraintName], "file": serverInfo[.file],
                 "line": serverInfo[.line], "routine": serverInfo[.routine],
                 "position": serverInfo[.position], "internalPosition": serverInfo[.internalPosition],
+                "message": serverInfo[.message],
             ].compactMapValues { $0 }
         } else {
             self.sqlState = nil
@@ -88,6 +94,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
             self.hint = nil
             self.detail = nil
             self.internalPosition = nil
+            self.serverMessage = nil
             self.serverInfo = nil
             self.message = PostgresErrorParsing.extractMessage(from: psqLError)
         }
@@ -113,6 +120,13 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
     internal static func encodingError(type: Any.Type) -> PostgresError { .init(message: "Could not encode value of type \(type) to PGData") }
     /// Object not found in the catalog.
     public static func objectNotFound(_ message: String) -> PostgresError { .init(message: message) }
+
+    /// A copy with `hint` set (used when the driver can suggest a fix the server did not).
+    internal func withHint(_ hint: String) -> PostgresError {
+        var info = serverInfo ?? [:]
+        info["hint"] = hint
+        return PostgresError(message: message, sqlState: sqlState, severity: severity, serverInfo: info, originalError: originalError)
+    }
 
     /// Get detailed debugging information.
     public func withDebugging() -> PostgresErrorDebugInfo {

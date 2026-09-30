@@ -20,6 +20,11 @@ public final class PostgresConnection: @unchecked Sendable {
         return try await wire.query(WireQuery(sql: sql), logger: logger)
     }
 
+    /// Run one statement and collect all rows plus the command tag (`UPDATE 3`, `CREATE TABLE`, …).
+    public func queryResult(_ sql: String) async throws -> WireQueryResult {
+        try await wire.queryResult(sql)
+    }
+
     /// Run one statement with bind parameters (`$1`, `$2`, …) and stream its rows.
     public func query(_ sql: String, binds: [PGData] = []) async throws -> WireRowSequence {
         if binds.isEmpty {

@@ -95,7 +95,7 @@ public enum PostgresSQLSplitter {
     }
 
     /// The first bare words of a statement (skipping comments and leading parentheses), uppercased.
-    static func leadingWords(_ statement: String, count: Int) -> [String] {
+    public static func leadingWords(_ statement: String, count: Int) -> [String] {
         var lexer = PostgresSQLLexer(statement)
         var words: [String] = []
         while words.count < count, let token = lexer.next() {
