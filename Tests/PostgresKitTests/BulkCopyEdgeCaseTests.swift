@@ -56,7 +56,8 @@ final class CopyParsingTests: XCTestCase {
         XCTAssertEqual(text.format, .text)
         XCTAssertEqual(text.delimiter, "\t")
         XCTAssertThrowsError(try CopyStatement.parse(sql: "COPY t FROM '/etc/passwd'"))
-        XCTAssertThrowsError(try CopyStatement.parse(sql: "COPY t TO STDOUT (FORMAT binary)"))
+        XCTAssertEqual(try CopyStatement.parse(sql: "COPY t TO STDOUT (FORMAT binary)").format, .binary)
+        XCTAssertEqual(try CopyStatement.parse(sql: "COPY t FROM STDIN BINARY").format, .binary)
     }
 }
 
