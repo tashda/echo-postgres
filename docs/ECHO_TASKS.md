@@ -19,9 +19,14 @@ The driver is merged into postgres-wire `dev`. The Echo changes below are commit
 | 8 Small items | ✅ Postgres arrays and `bit(n)` are no longer shown as numbers or booleans; `relacl`-style columns are read through the driver's text fallback |
 | Tests | ✅ `PostgresResultPipelineTests`, `PostgresSpoolDecodingTests`, and `PostgresQueryTabSessionTests` (end to end, runs when `ECHO_E2E_PG_PORT` is set) |
 
-Still to do in Echo (UI, so it needs an Echo Labs round first):
-- A transaction indicator for a tab (idle / in transaction / failed).
-- Asking Commit / Roll back / Cancel when a tab with an open transaction is closed or switches database. The data is available through `PostgresPinnedSessionStore.databasesWithOpenTransaction()`.
+Echo Labs round 21 covered the UI. Built into Echo since: values in the grid (R7), a lost connection (N6), script results (R8), cancelling (R9) and the transaction state in the footer (R10). Still open:
+- Asking Commit / Roll back / Cancel when a tab with an open transaction is closed or switches database (round 21 page "open transaction on close", not reviewed yet). The data is available through `PostgresPinnedSessionStore.databasesWithOpenTransaction()`.
+- Statement timeouts (round 21 page, revision 2 waiting for review).
+
+New in the driver, not offered in Echo's connection sheet yet:
+- **Kerberos**: nothing to configure for the common case (the driver answers a server that asks for Kerberos with the user's ticket). Echo should let a connection sign in without a password when Kerberos is used, show the service name (default `postgres`) under advanced settings, and on Linux builds note that `libkrb5` is needed.
+- **Encrypted client keys**: a key password field next to the client key (`sslKeyPassword`).
+- **Failover**: several hosts and target session attributes (`additionalHosts`, `targetSessionAttributes`) for connections to clusters.
 
 Found along the way, outside Postgres:
 - **SQL Server spools** mix UTF-8 preview rows with raw TDS bytes after row 200 (the `canUseRawPath` route), but `decodeRowData` decodes every row as UTF-8. So integer, float, bit and uniqueidentifier columns after row 200 are probably garbled, the same bug as E2. The type-aware `ResultBinaryRowCodec.decode(_:columns:)` cannot be used as it stands, because it would also misread the string-encoded preview rows. Encode the preview rows as TDS bytes too, or record per chunk which encoding it uses.

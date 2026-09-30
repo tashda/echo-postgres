@@ -247,5 +247,18 @@ These stay in the session scratchpad and are not in either repo:
 | `sslmode=allow` behaved like `prefer` | Plain first, TLS when `pg_hba.conf` rejects unencrypted connections. |
 | Oversized files | `PostgresActivityMonitor`, `AdvancedIntrospection` and three test files split under 500 lines. |
 
-**Still open: Kerberos / GSSAPI.** PostgresNIO's authentication state machine rejects GSS, and its types are internal. Supporting it needs a PostgresNIO fork plus a GSS.framework / libgssapi bridge, and a KDC to test against.
+**Kerberos / GSSAPI** was the last open item; it is closed in the follow-up below.
+
+### Follow-up: remaining enterprise gaps closed
+
+| Gap | Now |
+|---|---|
+| TLS never tested against a server that requires it | `Tests/Fixtures/tls` (private CA, server and client certificates, plain refused). `TLSIntegrationTests` cover every `sslmode`, host name checks, client certificates and pinned sessions with server-side cancel over TLS; CI runs them. `require` with a root certificate checks the issuer as libpq does; certificate failures read as what to do. |
+| Encrypted client keys | `sslKeyPassword` (libpq `sslpassword`). |
+| RDS IAM token only checked offline | Checked against botocore's `generate_db_auth_token`: same parameters and signature (session tokens, special and non-ASCII user names, IP host, non-default port). A sign-in to a real RDS instance has still not been made. |
+| Kerberos / GSSAPI | PostgresNIO 1.32.0 is copied into postgres-wire (`ThirdParty/postgres-nio` lists every change). Kerberos (GSSAPI, and SSPI from Windows servers) signs in with the user's ticket through Apple's GSS framework on macOS and MIT Kerberos on Linux (`libkrb5-dev`); `kerberosServiceName` (`postgres`) as libpq's `krbsrvname`. Tested against a KDC (`Tests/Fixtures/kerberos`) on macOS and Linux; CI runs it. |
+| Pool stuck on a dead host | The pool's circuit breaker trips after `connectTimeout` instead of 60 s; the pool then chooses among the configured hosts again (also when a read-write/primary server turns read-only). A call is retried only when nothing could run twice. `FailoverIntegrationTests` (`Tests/Fixtures/failover`). |
+| SQLSTATE lost on `queryResult` errors | Errors from PostgresNIO's older API keep their SQLSTATE, hint and position in PostgresKit (`isUniqueViolation` works there). |
+
+Full suite: 507 tests pass on PostgreSQL 17 with the TLS, Kerberos and failover servers running.
 
