@@ -4,17 +4,21 @@ import PostgresWire
 public extension PostgresSecurityClient {
     /// Grant specified privileges on a table to a user or role.
     @discardableResult
+    ///
+    /// With `columns`, the privileges apply to those columns only (`GRANT SELECT (a, b) ON ...`).
     func grantPrivileges(
         privileges: [PostgresPrivilege],
         onTable: String,
+        schema: String? = nil,
+        columns: [String]? = nil,
         to: String,
         withGrantOption: Bool = false,
         cascade: Bool = false
     ) async throws -> Int {
         var parts: [String] = ["GRANT"]
-        parts.append(privileges.map { $0.rawValue }.joined(separator: ", "))
-        parts.append("ON TABLE \(client.quoteIdentifier(onTable))")
-        parts.append("TO \(client.quoteIdentifier(to))")
+        parts.append(client.privilegeList(privileges, columns: columns))
+        parts.append("ON TABLE \(client.quoteQualified(onTable, schema: schema))")
+        parts.append("TO \(client.quoteGrantee(to))")
         if withGrantOption { parts.append("WITH GRANT OPTION") }
         if cascade { parts.append("CASCADE") }
         return try await client.executeDDL(parts.joined(separator: " "))
@@ -25,15 +29,17 @@ public extension PostgresSecurityClient {
     func revokePrivileges(
         privileges: [PostgresPrivilege],
         onTable: String,
+        schema: String? = nil,
+        columns: [String]? = nil,
         from: String,
         grantOption: Bool = false,
         cascade: Bool = false
     ) async throws -> Int {
         var parts: [String] = ["REVOKE"]
         if grantOption { parts.append("GRANT OPTION FOR") }
-        parts.append(privileges.map { $0.rawValue }.joined(separator: ", "))
-        parts.append("ON TABLE \(client.quoteIdentifier(onTable))")
-        parts.append("FROM \(client.quoteIdentifier(from))")
+        parts.append(client.privilegeList(privileges, columns: columns))
+        parts.append("ON TABLE \(client.quoteQualified(onTable, schema: schema))")
+        parts.append("FROM \(client.quoteGrantee(from))")
         if cascade { parts.append("CASCADE") }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -49,8 +55,16 @@ public extension PostgresSecurityClient {
     ) async throws -> Int {
         var parts: [String] = ["GRANT \(client.quoteIdentifier(role))"]
         parts.append("TO \(client.quoteIdentifier(to))")
-        // WITH ADMIN/INHERIT/SET syntax requires PG 16+; only include when non-default
-        if admin { parts.append("WITH ADMIN OPTION") }
+        // INHERIT and SET options need PostgreSQL 16+; they are only sent when given.
+        var options: [String] = []
+        if admin { options.append("ADMIN TRUE") }
+        if let inherit { options.append("INHERIT \(inherit ? "TRUE" : "FALSE")") }
+        if let set { options.append("SET \(set ? "TRUE" : "FALSE")") }
+        if options == ["ADMIN TRUE"] {
+            parts.append("WITH ADMIN OPTION")
+        } else if !options.isEmpty {
+            parts.append("WITH \(options.joined(separator: ", "))")
+        }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
 
@@ -182,5 +196,14 @@ public extension PostgresSecurityClient {
         parts.append("FROM \(client.quoteIdentifier(from))")
         if cascade { parts.append("CASCADE") }
         return try await client.executeDDL(parts.joined(separator: " "))
+    }
+}
+
+extension PostgresClient {
+    /// `SELECT, UPDATE` or, with columns, `SELECT ("a", "b"), UPDATE ("a", "b")`.
+    internal func privilegeList(_ privileges: [PostgresPrivilege], columns: [String]?) -> String {
+        guard let columns, !columns.isEmpty else { return privileges.map(\.rawValue).joined(separator: ", ") }
+        let columnList = "(\(columns.map(quoteIdentifier).joined(separator: ", ")))"
+        return privileges.map { "\($0.rawValue) \(columnList)" }.joined(separator: ", ")
     }
 }

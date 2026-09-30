@@ -116,6 +116,46 @@ struct SchemaQualifiedObjectsTests {
         }
     }
 
+    @Test func grantsAndPoliciesInANamedSchema() async throws {
+        do {
+            try await createGrantsAndPolicies()
+        } catch {
+            Issue.record("\(String(reflecting: error))")
+        }
+    }
+
+    private func createGrantsAndPolicies() async throws {
+        let client = try await connect()
+        defer { client.close() }
+        let suffix = UUID().uuidString.prefix(8).lowercased()
+        let schema = "sec_\(suffix)", reader = "reader_\(suffix)", group = "group_\(suffix)"
+        _ = try await client.admin.createSchema(name: schema)
+        _ = try await client.security.createRole(name: group)
+        _ = try await client.security.createRole(name: reader, login: true)
+        defer {
+            Task {
+                _ = try? await client.admin.dropSchema(name: schema, ifExists: true, cascade: true)
+                try? await client.security.dropOwned(by: reader)
+                _ = try? await client.security.dropRole(name: reader, ifExists: true)
+                _ = try? await client.security.dropRole(name: group, ifExists: true)
+            }
+        }
+        _ = try await client.admin.createTable(name: "salaries", schema: schema, columns: [
+            PostgresColumnDefinition(name: "employee", dataType: "text"),
+            PostgresColumnDefinition(name: "salary", dataType: "numeric"),
+            PostgresColumnDefinition(name: "region", dataType: "text"),
+        ])
+        _ = try await client.security.grantRole(role: group, to: reader, inherit: true)
+        _ = try await client.security.grantPrivileges(privileges: [.select], onTable: "salaries", schema: schema, columns: ["employee", "region"], to: reader)
+        _ = try await client.security.grantPrivileges(privileges: [.select], onTable: "salaries", schema: schema, to: "PUBLIC")
+        _ = try await client.security.revokePrivileges(privileges: [.select], onTable: "salaries", schema: schema, from: "PUBLIC")
+        _ = try await client.admin.alterTableRowLevelSecurity(table: "salaries", enable: true, schema: schema)
+        _ = try await client.security.createPolicy(name: "own_region", table: "salaries", schema: schema, command: .select,
+                                                   to: [group, "CURRENT_USER"], using: "region = current_user")
+        let policies = try await client.metadata.listPolicies(schema: schema, table: "salaries")
+        #expect(policies.count == 1)
+    }
+
     @Test func procedureSQL() {
         let sql = PostgresRoutineClient.procedureSQL(
             name: "\"s\".\"p\"", parameters: ["IN \"x\" integer"], body: "'SELECT 1'",
