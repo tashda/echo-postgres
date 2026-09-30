@@ -34,6 +34,8 @@ public struct PostgresConfiguration: Sendable {
     public var sslCertPath: String?
     /// Path to a PEM-encoded client private key file for mTLS.
     public var sslKeyPath: String?
+    /// The password protecting ``sslKeyPath`` (libpq `sslpassword`), if the key is encrypted.
+    public var sslKeyPassword: String?
     /// Reported to the server as `application_name` (visible in `pg_stat_activity`).
     public var applicationName: String?
     public var pool: PostgresPoolConfiguration
@@ -136,7 +138,7 @@ public struct PostgresConfiguration: Sendable {
 
 extension PostgresConfiguration {
     public func makeWireConfiguration() -> PostgresWireConfiguration {
-        .init(
+        var configuration = PostgresWireConfiguration(
             host: host,
             port: port,
             username: username,
@@ -164,5 +166,7 @@ extension PostgresConfiguration {
             loadBalanceHosts: loadBalanceHosts,
             passwordProvider: passwordProvider
         )
+        configuration.sslKeyPassword = sslKeyPassword
+        return configuration
     }
 }

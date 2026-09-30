@@ -37,3 +37,4 @@ postgres-wire
 
 # Root scripts moved to .github/scripts/
 /scripts/
+Tests/Fixtures/tls/certs/

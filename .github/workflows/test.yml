@@ -88,6 +88,26 @@ jobs:
           POSTGRES_PORT: "54321"
         run: swift test --filter PostgresKitTests
 
+  tls-tests:
+    name: "Step 3b: TLS against a server that requires it (PG 17)"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start the TLS server (private CA, server and client certificates)
+        run: |
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
+          mkdir -p "$DOCKER_CONFIG"
+          printf '{}\n' > "$DOCKER_CONFIG/config.json"
+          Tests/Fixtures/tls/start-server.sh >> "$GITHUB_ENV"
+          sed 's/^export //' -i "$GITHUB_ENV"
+
+      - name: Run TLS tests
+        run: swift test --filter TLSIntegrationTests
+
   matrix-tests:
     name: "Step 4: Compatibility - ${{ matrix.name }}"
     needs: build

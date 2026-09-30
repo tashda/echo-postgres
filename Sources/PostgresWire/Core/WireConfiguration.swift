@@ -60,6 +60,8 @@ public struct PostgresWireConfiguration: Sendable {
     public var sslCertPath: String?
     /// Path to a PEM-encoded client private key file for mTLS.
     public var sslKeyPath: String?
+    /// The password protecting ``sslKeyPath`` (libpq `sslpassword`), if the key is encrypted.
+    public var sslKeyPassword: String?
     /// Reported to the server as `application_name` (visible in `pg_stat_activity`).
     public var applicationName: String?
     /// TCP connect timeout in seconds. Defaults to 10.
@@ -204,7 +206,8 @@ public struct PostgresWireConfiguration: Sendable {
                     sslMode: sslMode,
                     sslRootCertPath: sslRootCertPath,
                     sslCertPath: sslCertPath,
-                    sslKeyPath: sslKeyPath
+                    sslKeyPath: sslKeyPath,
+                    sslKeyPassword: sslKeyPassword
                 )
             )
         }
@@ -234,7 +237,8 @@ public struct PostgresWireConfiguration: Sendable {
                     sslMode: sslMode,
                     sslRootCertPath: sslRootCertPath,
                     sslCertPath: sslCertPath,
-                    sslKeyPath: sslKeyPath
+                    sslKeyPath: sslKeyPath,
+                    sslKeyPassword: sslKeyPassword
                 )
             )
         }

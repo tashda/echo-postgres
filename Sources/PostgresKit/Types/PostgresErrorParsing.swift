@@ -50,7 +50,32 @@ internal enum PostgresErrorParsing {
         if desc.contains("connection refused") { return "Connection refused. The server may not be running or the port may be wrong." }
         if desc.contains("timed out") || desc.contains("timeout") { return "Connection timed out. The server may be unreachable." }
         if desc.contains("network is unreachable") || desc.contains("no route to host") { return "Network is unreachable." }
+        if let tls = describeTLSFailure(desc) { return tls }
         return "Could not connect to the server: \(String(describing: underlying))"
+    }
+
+    /// Certificate and handshake failures, in words someone can act on (the TLS library's text
+    /// follows in the log, not in the message).
+    static func describeTLSFailure(_ desc: String) -> String? {
+        if desc.contains("failedtovalidatehostname") || desc.contains("hostname_mismatch") {
+            return "The server's certificate is not issued for this host name. Connect with the name in the certificate, or use sslmode verify-ca, which checks the issuer but not the name."
+        }
+        if desc.contains("certificate_expired") || desc.contains("certificate has expired") {
+            return "The server's certificate has expired."
+        }
+        if desc.contains("certificate_verify_failed") || desc.contains("unable to get local issuer") || desc.contains("self signed") {
+            return "The server's certificate could not be verified: it is not signed by the root certificate given (sslrootcert) or by one the system trusts."
+        }
+        if desc.contains("tlsv1_alert_unknown_ca") || desc.contains("alert unknown ca") {
+            return "The server did not accept the client certificate: it is not signed by a certificate authority the server trusts."
+        }
+        if desc.contains("wrong_version_number") || desc.contains("unsupported_protocol") || desc.contains("no_protocols_available") {
+            return "Echo and the server could not agree on a TLS version."
+        }
+        if desc.contains("handshakefailed") {
+            return "The TLS handshake with the server failed."
+        }
+        return nil
     }
 
     /// Translate IOError errno codes into user-friendly messages.

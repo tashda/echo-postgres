@@ -24,6 +24,44 @@ final class AWSSigningTests: XCTestCase {
         XCTAssertTrue(query.hasSuffix("X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"), query)
     }
 
+    /// The same token as botocore's `generate_db_auth_token` (botocore 1.43, clock fixed at
+    /// 2026-09-30 12:00:00 UTC), including a session token, spaces and '@' in the user name,
+    /// non-ASCII user names, an IP host and a non-default port.
+    func testRDSTokensMatchBotocore() {
+        let date = ISO8601DateFormatter().date(from: "2026-09-30T12:00:00Z")!
+        let cases: [(host: String, port: Int, user: String, region: String, credentials: AWSCredentials, expected: String)] = [
+            ("db.abc.eu-north-1.rds.amazonaws.com", 5432, "app_user", "eu-north-1",
+             AWSCredentials(accessKeyID: "AKID", secretAccessKey: "secret", sessionToken: "tok/en+"),
+             "db.abc.eu-north-1.rds.amazonaws.com:5432/?Action=connect&DBUser=app_user&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKID%2F20260930%2Feu-north-1%2Frds-db%2Faws4_request&X-Amz-Date=20260930T120000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Security-Token=tok%2Fen%2B&X-Amz-Signature=5eed79fd4ff8188c60f645d85a0a6891e39ddc994269a26b35b662c79080f7df"),
+            ("mydb.cluster-xyz.us-east-1.rds.amazonaws.com", 5432, "iam user@corp", "us-east-1",
+             AWSCredentials(accessKeyID: "AKIAIOSFODNN7EXAMPLE", secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
+             "mydb.cluster-xyz.us-east-1.rds.amazonaws.com:5432/?Action=connect&DBUser=iam%20user%40corp&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20260930%2Fus-east-1%2Frds-db%2Faws4_request&X-Amz-Date=20260930T120000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=918a49b6854bef2da3c75b7141ae68ead7277043e4a9a5cece06989059864bba"),
+            ("10.0.0.5", 6432, "réportér", "ap-southeast-2",
+             AWSCredentials(accessKeyID: "AKIDEXAMPLE", secretAccessKey: "s3cr3t/+=", sessionToken: "FwoGZXIvYXdzE=="),
+             "10.0.0.5:6432/?Action=connect&DBUser=r%C3%A9port%C3%A9r&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F20260930%2Fap-southeast-2%2Frds-db%2Faws4_request&X-Amz-Date=20260930T120000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Security-Token=FwoGZXIvYXdzE%3D%3D&X-Amz-Signature=d5fc46ecddb44d91464e27d54bfe7a2fb6614dc343dfdb68561cfbf95c0b498d"),
+        ]
+        for testCase in cases {
+            let token = PostgresAWSRDSAuthToken.generate(
+                host: testCase.host, port: testCase.port, username: testCase.user, region: testCase.region,
+                credentials: testCase.credentials, date: date
+            )
+            // Same host, same parameters and signature; botocore lists X-Amz-Security-Token after
+            // X-Amz-SignedHeaders in the URL, the signed (canonical) order is the same.
+            let (ours, theirs) = (Self.parts(token), Self.parts(testCase.expected))
+            XCTAssertEqual(ours.0, theirs.0, testCase.user)
+            XCTAssertEqual(ours.1, theirs.1, testCase.user)
+        }
+    }
+
+    private static func parts(_ token: String) -> (String, [String: String]) {
+        let pieces = token.split(separator: "?", maxSplits: 1)
+        let parameters = Dictionary(uniqueKeysWithValues: pieces[1].split(separator: "&").map { pair -> (String, String) in
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            return (String(kv[0]), String(kv[1]))
+        })
+        return (String(pieces[0]), parameters)
+    }
+
     func testRDSTokenShape() {
         let date = ISO8601DateFormatter().date(from: "2026-09-30T12:00:00Z")!
         let token = PostgresAWSRDSAuthToken.generate(
