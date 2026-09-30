@@ -6,9 +6,7 @@ import PostgresNIO
 public enum PostgresSSLMode: String, Sendable, CaseIterable {
     /// No SSL/TLS encryption.
     case disable
-    /// Try non-SSL first, then SSL if the server requires it.
-    ///
-    /// PostgresNIO cannot fall back from plain to TLS, so this behaves like ``prefer``.
+    /// Try non-SSL first, then SSL if the server rejects the unencrypted connection.
     case allow
     /// Try SSL first, fall back to non-SSL if the server doesn't support it.
     case prefer
@@ -78,6 +76,16 @@ public struct PostgresWireConfiguration: Sendable {
     public var idleInTransactionSessionTimeout: Duration?
     /// Extra run-time parameters sent in the startup packet (for example `search_path`).
     public var additionalStartupParameters: [String: String]
+    /// Further servers to try after `host`/`port`, like libpq's multi-host connection strings.
+    public var additionalHosts: [PostgresHost]
+    /// Which kind of server to accept among ``host`` and ``additionalHosts`` (libpq `target_session_attrs`).
+    public var targetSessionAttributes: PostgresTargetSessionAttributes
+    /// Try the hosts in random order (libpq `load_balance_hosts=random`).
+    public var loadBalanceHosts: Bool
+    /// Supplies the password for each new connection instead of ``password`` — for short-lived tokens
+    /// such as AWS RDS IAM authentication. When the credential expires, the pool is replaced with one
+    /// that uses a fresh credential before the old one runs out.
+    public var passwordProvider: PostgresPasswordProvider?
 
     /// Whether TLS is enabled (any mode other than `disable`).
     public var useTLS: Bool { sslMode != .disable }
@@ -99,7 +107,11 @@ public struct PostgresWireConfiguration: Sendable {
         statementTimeout: Duration? = nil,
         lockTimeout: Duration? = nil,
         idleInTransactionSessionTimeout: Duration? = nil,
-        additionalStartupParameters: [String: String] = [:]
+        additionalStartupParameters: [String: String] = [:],
+        additionalHosts: [PostgresHost] = [],
+        targetSessionAttributes: PostgresTargetSessionAttributes = .any,
+        loadBalanceHosts: Bool = false,
+        passwordProvider: PostgresPasswordProvider? = nil
     ) {
         self.host = host
         self.port = port
@@ -118,6 +130,10 @@ public struct PostgresWireConfiguration: Sendable {
         self.lockTimeout = lockTimeout
         self.idleInTransactionSessionTimeout = idleInTransactionSessionTimeout
         self.additionalStartupParameters = additionalStartupParameters
+        self.additionalHosts = additionalHosts
+        self.targetSessionAttributes = targetSessionAttributes
+        self.loadBalanceHosts = loadBalanceHosts
+        self.passwordProvider = passwordProvider
     }
 
     /// Backward-compatible initializer using a simple `useTLS` boolean.

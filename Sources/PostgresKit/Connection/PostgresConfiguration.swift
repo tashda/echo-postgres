@@ -49,6 +49,15 @@ public struct PostgresConfiguration: Sendable {
     public var idleInTransactionSessionTimeout: Duration?
     /// Extra run-time parameters sent at connection start (for example `search_path`).
     public var additionalStartupParameters: [String: String]
+    /// Further servers to try after `host`/`port` (libpq multi-host).
+    public var additionalHosts: [PostgresHost]
+    /// Which server to accept among the hosts (libpq `target_session_attrs`).
+    public var targetSessionAttributes: PostgresTargetSessionAttributes
+    /// Try the hosts in random order (libpq `load_balance_hosts=random`).
+    public var loadBalanceHosts: Bool
+    /// Supplies the password per connection (short-lived tokens such as AWS RDS IAM); see
+    /// ``PostgresAWSRDSAuthToken``. Overrides ``password``.
+    public var passwordProvider: PostgresPasswordProvider?
 
     /// Whether TLS is enabled (any mode other than `disable`).
     public var useTLS: Bool { sslMode != .disable }
@@ -70,7 +79,11 @@ public struct PostgresConfiguration: Sendable {
         statementTimeout: Duration? = nil,
         lockTimeout: Duration? = nil,
         idleInTransactionSessionTimeout: Duration? = nil,
-        additionalStartupParameters: [String: String] = [:]
+        additionalStartupParameters: [String: String] = [:],
+        additionalHosts: [PostgresHost] = [],
+        targetSessionAttributes: PostgresTargetSessionAttributes = .any,
+        loadBalanceHosts: Bool = false,
+        passwordProvider: PostgresPasswordProvider? = nil
     ) {
         self.host = host
         self.port = port
@@ -89,6 +102,10 @@ public struct PostgresConfiguration: Sendable {
         self.lockTimeout = lockTimeout
         self.idleInTransactionSessionTimeout = idleInTransactionSessionTimeout
         self.additionalStartupParameters = additionalStartupParameters
+        self.additionalHosts = additionalHosts
+        self.targetSessionAttributes = targetSessionAttributes
+        self.loadBalanceHosts = loadBalanceHosts
+        self.passwordProvider = passwordProvider
     }
 
     /// Backward-compatible initializer using a simple `useTLS` boolean.
@@ -141,7 +158,11 @@ extension PostgresConfiguration {
             statementTimeout: statementTimeout,
             lockTimeout: lockTimeout,
             idleInTransactionSessionTimeout: idleInTransactionSessionTimeout,
-            additionalStartupParameters: additionalStartupParameters
+            additionalStartupParameters: additionalStartupParameters,
+            additionalHosts: additionalHosts,
+            targetSessionAttributes: targetSessionAttributes,
+            loadBalanceHosts: loadBalanceHosts,
+            passwordProvider: passwordProvider
         )
     }
 }
