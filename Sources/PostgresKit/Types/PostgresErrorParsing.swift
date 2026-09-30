@@ -56,13 +56,13 @@ internal enum PostgresErrorParsing {
     /// Translate IOError errno codes into user-friendly messages.
     static func describeIOError(_ error: IOError) -> String {
         switch error.errnoCode {
-        case 1:  return "Connection failed. The server may not be running or the address is unreachable."
-        case 13: return "Permission denied when connecting to the server."
-        case 51: return "Network is unreachable."
-        case 60: return "Connection timed out. The server may be unreachable."
-        case 61: return "Connection refused. The server may not be running or the port may be wrong."
-        case 64: return "The server appears to be down."
-        case 65: return "No route to host. The server may be unreachable."
+        case EPERM: return "Connection failed. The server may not be running or the address is unreachable."
+        case EACCES: return "Permission denied when connecting to the server."
+        case ENETUNREACH: return "Network is unreachable."
+        case ETIMEDOUT: return "Connection timed out. The server may be unreachable."
+        case ECONNREFUSED: return "Connection refused. The server may not be running or the port may be wrong."
+        case EHOSTDOWN: return "The server appears to be down."
+        case EHOSTUNREACH: return "No route to host. The server may be unreachable."
         default: return "Connection failed: \(String(describing: error))"
         }
     }

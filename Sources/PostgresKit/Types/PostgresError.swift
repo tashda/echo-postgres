@@ -12,6 +12,18 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
     /// Severity level (optional for advanced users).
     public let severity: String?
 
+    /// 1-based character position of the error in the statement text, when the server reports one.
+    public let position: Int?
+
+    /// The server's hint, if any (for example "No function matches the given name and argument types.").
+    public let hint: String?
+
+    /// The server's detail message, if any.
+    public let detail: String?
+
+    /// Position inside an internally generated query (for example inside a PL/pgSQL function), if any.
+    public let internalPosition: Int?
+
     /// Full server information (available through withDebugging()).
     internal let serverInfo: [String: String]?
 
@@ -30,6 +42,10 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
         self.severity = severity
         self.serverInfo = serverInfo
         self.originalError = originalError
+        self.position = serverInfo?["position"].flatMap(Int.init)
+        self.hint = serverInfo?["hint"]
+        self.detail = serverInfo?["detail"]
+        self.internalPosition = serverInfo?["internalPosition"].flatMap(Int.init)
     }
 
     /// Create from PSQLError with enhanced parsing.
@@ -39,6 +55,10 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
         if let serverInfo = psqLError.serverInfo {
             self.sqlState = serverInfo[.sqlState]
             self.severity = serverInfo[.severity]
+            self.position = serverInfo[.position].flatMap(Int.init)
+            self.hint = serverInfo[.hint]
+            self.detail = serverInfo[.detail]
+            self.internalPosition = serverInfo[.internalPosition].flatMap(Int.init)
 
             var detailedMessage = serverInfo[.message] ?? psqLError.localizedDescription
             if let constraintName = serverInfo[.constraintName] {
@@ -59,10 +79,15 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
                 "columnName": serverInfo[.columnName], "dataTypeName": serverInfo[.dataTypeName],
                 "constraintName": serverInfo[.constraintName], "file": serverInfo[.file],
                 "line": serverInfo[.line], "routine": serverInfo[.routine],
+                "position": serverInfo[.position], "internalPosition": serverInfo[.internalPosition],
             ].compactMapValues { $0 }
         } else {
             self.sqlState = nil
             self.severity = nil
+            self.position = nil
+            self.hint = nil
+            self.detail = nil
+            self.internalPosition = nil
             self.serverInfo = nil
             self.message = PostgresErrorParsing.extractMessage(from: psqLError)
         }
@@ -74,6 +99,13 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
         if let postgresError = error as? PostgresError { return postgresError }
         if let ioError = error as? IOError { return PostgresError(message: PostgresErrorParsing.describeIOError(ioError)) }
         return PostgresError(message: error.localizedDescription)
+    }
+
+    /// Like ``from(_:)`` for driver errors (`PSQLError`, `IOError`); any other error is returned unchanged.
+    internal static func fromDriver(_ error: any Error) -> any Error {
+        if let psqlError = error as? PSQLError { return PostgresError(from: psqlError) }
+        if let ioError = error as? IOError { return PostgresError(message: PostgresErrorParsing.describeIOError(ioError)) }
+        return error
     }
 
     internal static func protocolError(_ message: String) -> PostgresError { .init(message: message) }

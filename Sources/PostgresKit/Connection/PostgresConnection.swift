@@ -20,31 +20,14 @@ public final class PostgresConnection: @unchecked Sendable {
         return try await wire.query(WireQuery(sql: sql), logger: logger)
     }
 
+    /// Run one statement with bind parameters (`$1`, `$2`, …) and stream its rows.
     public func query(_ sql: String, binds: [PGData] = []) async throws -> WireRowSequence {
         if binds.isEmpty {
             return try await wire.query(WireQuery(sql: sql), logger: logger)
         }
-        let paramCount = binds.count
-        if let info = cache.lookup(sql: sql, parameterCount: paramCount) {
-            do {
-                return try await wire.execute(prepared: info.handle, binds: binds, logger: logger)
-            } catch let err as PSQLError {
-                if let state = err.serverInfo?[.sqlState], state == "26000" {
-                    // invalid_sql_statement_name -> evict and retry once
-                    cache.remove(sql: sql, parameterCount: paramCount)
-                    let prepared = try await wire.prepare(sql)
-                    let info = PreparedStatementInfo(sql: sql, parameterCount: paramCount, handle: prepared)
-                    cache.insert(info)
-                    return try await wire.execute(prepared: prepared, binds: binds, logger: logger)
-                }
-                throw err
-            }
-        } else {
-            let prepared = try await wire.prepare(sql)
-            let info = PreparedStatementInfo(sql: sql, parameterCount: paramCount, handle: prepared)
-            cache.insert(info)
-            return try await wire.execute(prepared: prepared, binds: binds, logger: logger)
-        }
+        let statement = try await wire.prepare(sql)
+        cache.insert(PreparedStatementInfo(sql: sql, parameterCount: binds.count, handle: statement))
+        return try await wire.execute(prepared: statement, binds: binds, logger: logger)
     }
 
     // MARK: - Notifications

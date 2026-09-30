@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import Metrics
+import NIOConcurrencyHelpers
 import PostgresWire
 import PostgresNIO
 
@@ -11,14 +12,23 @@ public final class PostgresClient: @unchecked Sendable {
     internal let wire: PostgresWireClient
     internal let logger: Logger
     private let registry = PreparedRegistry()
-    internal var notifierActor: PostgresNotifier!
+    private let notifierBox = NIOLockedValueBox<PostgresNotifier?>(nil)
+
+    /// LISTEN/NOTIFY support, created on first use. It references this client weakly.
+    internal var notifierActor: PostgresNotifier {
+        notifierBox.withLockedValue { box in
+            if let notifier = box { return notifier }
+            let notifier = PostgresNotifier(client: self, logger: logger)
+            box = notifier
+            return notifier
+        }
+    }
 
     private init(wire: PostgresWireClient, logger: Logger) {
         self.wire = wire
         var logger = logger
         logger[metadataKey: "component"] = "PostgresClient"
         self.logger = logger
-        self.notifierActor = PostgresNotifier(client: self, logger: logger)
     }
 
     deinit { wire.close() }
@@ -49,12 +59,50 @@ public final class PostgresClient: @unchecked Sendable {
     ) async throws -> T {
         do {
             return try await wire.withConnection { connection in
-                let cache = await registry.statementCache(for: connection.id)
-                let serverCache = await registry.serverPreparedCache(for: connection.id)
+                let cache = await registry.statementCache(for: connection.connectionID)
+                let serverCache = await registry.serverPreparedCache(for: connection.connectionID)
                 return try await body(PostgresConnection(wireConnection: connection, logger: logger, cache: cache, serverCache: serverCache))
             }
         } catch {
-            throw PostgresKit.PostgresError.from(error)
+            // Translate driver errors; errors thrown by `body` itself pass through unchanged.
+            throw PostgresKit.PostgresError.fromDriver(error)
+        }
+    }
+
+    /// Run `body` inside `BEGIN … COMMIT` on one leased connection.
+    ///
+    /// Commits when `body` returns and rolls back when it throws (including cancellation). Every
+    /// statement inside `body` must use the `connection` it is given — the client itself is a pool.
+    public func withTransaction<T>(
+        isolation: PostgresIsolationLevel? = nil,
+        readOnly: Bool = false,
+        _ body: @Sendable (PostgresConnection) async throws -> T
+    ) async throws -> T {
+        try await withConnection { connection in
+            var begin = "BEGIN"
+            if let isolation { begin += " ISOLATION LEVEL \(isolation.rawValue)" }
+            if readOnly { begin += " READ ONLY" }
+            _ = try await connection.executeDDL(begin)
+            do {
+                let result = try await body(connection)
+                _ = try await connection.executeDDL("COMMIT")
+                return result
+            } catch {
+                _ = try? await connection.executeDDL("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
+    /// Ask the server to cancel what backend `pid` is running (`pg_cancel_backend`).
+    ///
+    /// - Returns: `false` when the server did not signal the backend (for example, it no longer exists).
+    @discardableResult
+    public func cancelBackend(pid: Int32) async throws -> Bool {
+        do {
+            return try await wire.cancelBackend(pid: pid)
+        } catch {
+            throw PostgresError.from(error)
         }
     }
 
@@ -83,32 +131,52 @@ public final class PostgresClient: @unchecked Sendable {
     /// Quote an identifier to prevent SQL injection.
     /// Handles schema-qualified names like "app.users" → "app"."users".
     internal func quoteIdentifier(_ identifier: String) -> String {
-        identifier.split(separator: ".", maxSplits: 1)
-            .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
-            .joined(separator: ".")
+        PostgresQuoting.quoteQualifiedIdentifier(identifier)
+    }
+
+    /// Quote a single identifier (no schema splitting).
+    internal func quoteSimpleIdentifier(_ identifier: String) -> String {
+        PostgresQuoting.quoteIdentifier(identifier)
     }
 
     /// Quote a literal string to prevent SQL injection.
     internal func quoteLiteral(_ literal: String) -> String {
-        return "'\(literal.replacingOccurrences(of: "'", with: "''"))'"
+        PostgresQuoting.quoteLiteral(literal)
     }
 }
 
 // MARK: - Internal Registry
 
-/// Registry associates a per-connection StatementCache via connection identity.
+/// Per-connection caches keyed by the pool's connection ID (unique for the pool's lifetime).
+///
+/// The pool does not report closed connections, so the registry keeps the most recently used
+/// `capacity` connections and drops the oldest beyond that.
 private actor PreparedRegistry {
-    private var stmtCaches: [ObjectIdentifier: StatementCache] = [:]
-    private var serverCaches: [ObjectIdentifier: PreparedServerCache] = [:]
+    private let capacity = 64
+    private var stmtCaches: [Int: StatementCache] = [:]
+    private var serverCaches: [Int: PreparedServerCache] = [:]
+    private var order: [Int] = []
 
-    func statementCache(for id: ObjectIdentifier) -> StatementCache {
+    private func touch(_ id: Int) {
+        if let index = order.firstIndex(of: id) { order.remove(at: index) }
+        order.append(id)
+        while order.count > capacity {
+            let evicted = order.removeFirst()
+            stmtCaches[evicted] = nil
+            serverCaches[evicted] = nil
+        }
+    }
+
+    func statementCache(for id: Int) -> StatementCache {
+        touch(id)
         if let cache = stmtCaches[id] { return cache }
         let new = StatementCache(capacity: 256)
         stmtCaches[id] = new
         return new
     }
 
-    func serverPreparedCache(for id: ObjectIdentifier) -> PreparedServerCache {
+    func serverPreparedCache(for id: Int) -> PreparedServerCache {
+        touch(id)
         if let cache = serverCaches[id] { return cache }
         let new = PreparedServerCache(capacity: 128)
         serverCaches[id] = new

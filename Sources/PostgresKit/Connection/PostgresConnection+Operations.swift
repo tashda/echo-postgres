@@ -45,9 +45,7 @@ public extension PostgresConnection {
 
 internal extension PostgresConnection {
     func quoteIdentifier(_ identifier: String) -> String {
-        identifier.split(separator: ".", maxSplits: 1)
-            .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
-            .joined(separator: ".")
+        PostgresQuoting.quoteQualifiedIdentifier(identifier)
     }
 
     func toPGData(value: any PostgresEncodable) throws -> PGData {

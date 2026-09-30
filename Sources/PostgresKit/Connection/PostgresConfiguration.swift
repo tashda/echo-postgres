@@ -1,15 +1,23 @@
 import Foundation
 import Logging
 
-public struct PostgresPoolConfiguration: Sendable {
+/// Pool settings for ``PostgresClient``. The defaults match PostgresNIO's own defaults.
+///
+/// A pool hands out *any* free connection per call and closes idle ones, so it must not be used for
+/// interactive sessions where the user runs `BEGIN`, `SET`, temp tables and so on across several
+/// calls. Use ``PostgresSessionConnection`` for that.
+public struct PostgresPoolConfiguration: Sendable, Equatable {
     public var minimum: Int
     public var maximum: Int
     public var idleTimeoutSeconds: Int
+    /// Interval of the keep-alive query on idle pooled connections, `nil` to disable.
+    public var keepAliveSeconds: Int?
 
-    public init(minimum: Int = 0, maximum: Int = 8, idleTimeoutSeconds: Int = 30) {
+    public init(minimum: Int = 0, maximum: Int = 20, idleTimeoutSeconds: Int = 60, keepAliveSeconds: Int? = 30) {
         self.minimum = minimum
         self.maximum = maximum
         self.idleTimeoutSeconds = idleTimeoutSeconds
+        self.keepAliveSeconds = keepAliveSeconds
     }
 }
 
@@ -26,10 +34,21 @@ public struct PostgresConfiguration: Sendable {
     public var sslCertPath: String?
     /// Path to a PEM-encoded client private key file for mTLS.
     public var sslKeyPath: String?
+    /// Reported to the server as `application_name` (visible in `pg_stat_activity`).
     public var applicationName: String?
     public var pool: PostgresPoolConfiguration
     /// TCP connect timeout in seconds. Defaults to 10.
     public var connectTimeout: Int
+    /// Connect through a Unix domain socket instead of TCP (`host`, `port` and TLS are then ignored).
+    public var unixSocketPath: String?
+    /// Server-side `statement_timeout` for every connection, `nil` for the server default.
+    public var statementTimeout: Duration?
+    /// Server-side `lock_timeout` for every connection, `nil` for the server default.
+    public var lockTimeout: Duration?
+    /// Server-side `idle_in_transaction_session_timeout`, `nil` for the server default.
+    public var idleInTransactionSessionTimeout: Duration?
+    /// Extra run-time parameters sent at connection start (for example `search_path`).
+    public var additionalStartupParameters: [String: String]
 
     /// Whether TLS is enabled (any mode other than `disable`).
     public var useTLS: Bool { sslMode != .disable }
@@ -46,7 +65,12 @@ public struct PostgresConfiguration: Sendable {
         sslKeyPath: String? = nil,
         applicationName: String? = nil,
         pool: PostgresPoolConfiguration = .init(),
-        connectTimeout: Int = 10
+        connectTimeout: Int = 10,
+        unixSocketPath: String? = nil,
+        statementTimeout: Duration? = nil,
+        lockTimeout: Duration? = nil,
+        idleInTransactionSessionTimeout: Duration? = nil,
+        additionalStartupParameters: [String: String] = [:]
     ) {
         self.host = host
         self.port = port
@@ -60,6 +84,11 @@ public struct PostgresConfiguration: Sendable {
         self.applicationName = applicationName
         self.pool = pool
         self.connectTimeout = connectTimeout
+        self.unixSocketPath = unixSocketPath
+        self.statementTimeout = statementTimeout
+        self.lockTimeout = lockTimeout
+        self.idleInTransactionSessionTimeout = idleInTransactionSessionTimeout
+        self.additionalStartupParameters = additionalStartupParameters
     }
 
     /// Backward-compatible initializer using a simple `useTLS` boolean.
@@ -101,8 +130,18 @@ extension PostgresConfiguration {
             sslCertPath: sslCertPath,
             sslKeyPath: sslKeyPath,
             applicationName: applicationName,
-            connectTimeout: connectTimeout
+            connectTimeout: connectTimeout,
+            unixSocketPath: unixSocketPath,
+            pool: PostgresWirePoolOptions(
+                minimumConnections: pool.minimum,
+                maximumConnections: pool.maximum,
+                idleTimeout: .seconds(pool.idleTimeoutSeconds),
+                keepAliveFrequency: pool.keepAliveSeconds.map { .seconds($0) }
+            ),
+            statementTimeout: statementTimeout,
+            lockTimeout: lockTimeout,
+            idleInTransactionSessionTimeout: idleInTransactionSessionTimeout,
+            additionalStartupParameters: additionalStartupParameters
         )
     }
 }
-

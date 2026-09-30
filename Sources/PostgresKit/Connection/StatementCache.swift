@@ -1,10 +1,16 @@
+import PostgresWire
 import Foundation
 
-// Simple LRU cache used for prepared-statement metadata.
-public final class LRUCache<Key: Hashable, Value> {
-    private var dict: [Key: (value: Value, index: Int)] = [:]
+import NIOConcurrencyHelpers
+
+/// Small least-recently-used cache. Thread-safe; lookups and updates are O(capacity), which is fine
+/// for the small capacities it is used with.
+public final class LRUCache<Key: Hashable, Value>: @unchecked Sendable {
+    private var values: [Key: Value] = [:]
+    /// Least recently used first.
     private var order: [Key] = []
     private let capacity: Int
+    private let lock = NIOLock()
 
     public init(capacity: Int) {
         precondition(capacity > 0, "LRU capacity must be > 0")
@@ -12,53 +18,38 @@ public final class LRUCache<Key: Hashable, Value> {
     }
 
     public func get(_ key: Key) -> Value? {
-        guard let entry = dict[key] else { return nil }
-        touch(key, at: entry.index)
-        return entry.value
+        lock.withLock {
+            guard let value = values[key] else { return nil }
+            touch(key)
+            return value
+        }
     }
 
     public func set(_ key: Key, value: Value) {
-        if let entry = dict[key] {
-            dict[key] = (value, entry.index)
-            touch(key, at: entry.index)
-            return
-        }
-        // Evict if full
-        if order.count == capacity, let lru = order.first {
-            dict.removeValue(forKey: lru)
-            order.removeFirst()
-        }
-        order.append(key)
-        dict[key] = (value, order.count - 1)
-    }
-
-    private func touch(_ key: Key, at index: Int) {
-        guard index < order.count, order[index] == key else { return }
-        order.remove(at: index)
-        order.append(key)
-        // Rebuild indices (small capacity keeps this cheap)
-        for (i, k) in order.enumerated() {
-            if let val = dict[k]?.value { dict[k] = (val, i) }
+        lock.withLock {
+            if values.updateValue(value, forKey: key) != nil {
+                touch(key)
+                return
+            }
+            order.append(key)
+            while order.count > capacity {
+                values.removeValue(forKey: order.removeFirst())
+            }
         }
     }
 
     public func remove(_ key: Key) {
-        guard let entry = dict.removeValue(forKey: key) else { return }
-        if entry.index < order.count && order[entry.index] == key {
-            order.remove(at: entry.index)
-            // Rebuild indices
-            for (i, k) in order.enumerated() {
-                if let val = dict[k]?.value { dict[k] = (val, i) }
-            }
-        } else {
-            // If indices drifted, fallback to linear removal
-            if let idx = order.firstIndex(of: key) {
-                order.remove(at: idx)
-                for (i, k) in order.enumerated() {
-                    if let val = dict[k]?.value { dict[k] = (val, i) }
-                }
-            }
+        lock.withLock {
+            guard values.removeValue(forKey: key) != nil else { return }
+            if let index = order.firstIndex(of: key) { order.remove(at: index) }
         }
+    }
+
+    public var count: Int { lock.withLock { values.count } }
+
+    private func touch(_ key: Key) {
+        if let index = order.firstIndex(of: key) { order.remove(at: index) }
+        order.append(key)
     }
 }
 
@@ -73,6 +64,10 @@ public struct PreparedStatementInfo: Sendable {
     }
 }
 
+/// Per-connection record of statements that were run with binds.
+///
+/// PostgresNIO sends bound queries as unnamed statements (parsed on every execution), so this holds
+/// metadata only; server-side prepared statements live in ``PreparedServerCache``.
 public final class StatementCache: @unchecked Sendable {
     private let lru: LRUCache<String, PreparedStatementInfo>
 
@@ -97,4 +92,3 @@ public final class StatementCache: @unchecked Sendable {
         lru.remove(k)
     }
 }
-import PostgresWire

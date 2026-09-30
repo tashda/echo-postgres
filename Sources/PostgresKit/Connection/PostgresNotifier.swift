@@ -7,8 +7,12 @@ public struct PostgresNotification: Sendable, Equatable {
     public let pid: Int32?
 }
 
+/// LISTEN/NOTIFY fan-out for a ``PostgresClient``.
+///
+/// Holds its client weakly (the client owns the notifier). While ``listen(channels:)`` is active the
+/// listening task keeps the client alive; call ``stop()`` to release it.
 public actor PostgresNotifier {
-    private let client: PostgresClient
+    private weak var client: PostgresClient?
     private let logger: Logger
     private var listeningTask: Task<Void, Never>?
     public typealias Handler = @Sendable (PostgresNotification) -> Void
@@ -27,11 +31,16 @@ public actor PostgresNotifier {
         self.logger = logger
     }
 
+    private func requireClient() throws -> PostgresClient {
+        guard let client else { throw PostgresError(message: "The PostgresClient of this notifier has been released") }
+        return client
+    }
+
     public func notify(channel: String, payload: String? = nil) async throws {
+        let client = try requireClient()
         let sql: String
         if let payload {
-            let quoted = payload.replacingOccurrences(of: "'", with: "''")
-            sql = "NOTIFY \(quoteIdent(channel)), '\(quoted)'"
+            sql = "NOTIFY \(quoteIdent(channel)), \(PostgresQuoting.quoteLiteral(payload))"
         } else {
             sql = "NOTIFY \(quoteIdent(channel))"
         }
@@ -44,6 +53,7 @@ public actor PostgresNotifier {
         listeningTask = nil
         // Normalize keys
         let normalized = channels.map { $0.lowercased() }
+        let client = try requireClient()
         // Start a supervisor task that re-establishes LISTEN after reconnects
         listeningTask = Task { [weak self, client, logger] in
             guard let self else { return }
@@ -99,7 +109,7 @@ public actor PostgresNotifier {
             tokens.forEach { $0.stop() }
         }
         // issue UNLISTEN on a temp connection
-        try await client.withConnection { conn in
+        try await requireClient().withConnection { conn in
             _ = try await conn.simpleQuery("UNLISTEN \(quoteIdent(key))")
         }
         handlers[key] = []

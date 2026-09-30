@@ -93,6 +93,38 @@ public final class WireConnection: WireConnectionProtocol {
 
     public var id: ObjectIdentifier { ObjectIdentifier(connection) }
 
+    /// The pool-assigned connection number; unlike ``id`` it is never reused while the pool lives.
+    public var connectionID: Int { connection.id }
+
+    // MARK: - COPY
+
+    /// Stream data into a table with `COPY … FROM STDIN` in COPY *text* format (tab-separated unless
+    /// `delimiter` is set, `\N` for NULL, backslash escapes). Runs as one statement, so it is atomic.
+    ///
+    /// Names are passed as plain (unquoted) identifiers and quoted here.
+    public func copyFrom(
+        schema: String?,
+        table: String,
+        columns: [String] = [],
+        delimiter: UnicodeScalar? = nil,
+        logger: Logger? = nil,
+        writeData: (PostgresCopyFromWriter) async throws -> Void
+    ) async throws {
+        // PostgresNIO wraps the table and each column in double quotes without escaping, so escape
+        // embedded quotes here and splice the schema in as `schema"."table`.
+        func escaped(_ identifier: String) -> String { identifier.replacingOccurrences(of: "\"", with: "\"\"") }
+        let qualifiedTable = schema.map { escaped($0) + "\".\"" + escaped(table) } ?? escaped(table)
+        var format = PostgresCopyFromFormat.TextOptions()
+        format.delimiter = delimiter
+        try await connection.copyFrom(
+            table: qualifiedTable,
+            columns: columns.map(escaped),
+            format: .text(format),
+            logger: logger ?? Logger(label: "postgres.wire.connection"),
+            writeData: writeData
+        )
+    }
+
     // MARK: - Notifications
 
     public struct WireListenToken: Sendable {

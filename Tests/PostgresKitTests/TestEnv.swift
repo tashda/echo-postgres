@@ -1,9 +1,13 @@
 import Foundation
 import Logging
+import PostgresKit
 
 enum TestEnv {
     private static let logger = Logger(label: "postgres.wire.tests")
+    /// Loads `.env` from the working directory. When `USE_DOCKER=1`, `POSTGRES_*` entries are ignored so
+    /// a `.env` that points at a real server can never redirect tests away from the Docker fixture.
     static func loadDotEnv() {
+        let dockerManaged = getEnv("USE_DOCKER") == "1"
         let fm = FileManager.default
         let cwd = fm.currentDirectoryPath
         let envPath = (cwd as NSString).appendingPathComponent(".env")
@@ -15,6 +19,7 @@ enum TestEnv {
                 if let eq = trimmed.firstIndex(of: "=") {
                     let key = String(trimmed[..<eq])
                     let value = String(trimmed[trimmed.index(after: eq)...])
+                    if dockerManaged && key.hasPrefix("POSTGRES_") { continue }
                     setenv(key, value, 1)
                 }
             }
@@ -66,5 +71,27 @@ enum TestEnv {
 
     static var useTLS: Bool {
         (getEnv("POSTGRES_TLS") ?? "false").lowercased() == "true"
+    }
+
+    /// Configuration for the test server, with optional overrides for the settings under test.
+    static func configuration(
+        database: String? = nil,
+        username: String? = nil,
+        password: String? = nil,
+        applicationName: String? = "postgres-wire-tests",
+        pool: PostgresPoolConfiguration = .init(),
+        statementTimeout: Duration? = nil
+    ) -> PostgresConfiguration {
+        PostgresConfiguration(
+            host: host,
+            port: port,
+            database: database ?? self.database,
+            username: username ?? self.username,
+            password: password ?? self.password,
+            sslMode: useTLS ? .require : .disable,
+            applicationName: applicationName,
+            pool: pool,
+            statementTimeout: statementTimeout
+        )
     }
 }
