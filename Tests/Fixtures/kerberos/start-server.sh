@@ -30,6 +30,8 @@ cat > "$state/krb5.conf" <<CONF
     dns_lookup_kdc = false
     rdns = false
     dns_canonicalize_hostname = false
+    # MIT otherwise adds the DNS search domain to "localhost" (CI runners have one).
+    qualify_shortname = ""
     udp_preference_limit = 1
 [realms]
     EXAMPLE.TEST = {
