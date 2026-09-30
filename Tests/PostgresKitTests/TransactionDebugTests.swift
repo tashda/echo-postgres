@@ -8,7 +8,6 @@ final class TransactionDebugTests: PostgresKitTestCase {
     private var testLogger: Logger!
 
     override func setUp() async throws {
-        TestEnv.loadDotEnv()
         try await super.setUp()
         guard TestEnv.isConfigured else {
             throw XCTSkip("POSTGRES_HOST not set; skipping integration test")

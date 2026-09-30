@@ -8,7 +8,6 @@ final class DDLTests: PostgresKitTestCase {
     private var testLogger: Logger!
 
     override func setUp() async throws {
-        TestEnv.loadDotEnv()
         try await super.setUp()
         testLogger = Logger(label: "postgres.wire.tests")
 

@@ -10,7 +10,6 @@ final class AdvancedClientTests: PostgresKitTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        TestEnv.loadDotEnv()
         guard TestEnv.isConfigured else {
             throw XCTSkip("POSTGRES_HOST not set. Copy .env.example to .env and configure connection.")
         }

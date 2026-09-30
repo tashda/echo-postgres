@@ -8,7 +8,6 @@ final class UserManagementTests: PostgresKitTestCase {
     private var testLogger: Logger!
 
     override func setUp() async throws {
-        TestEnv.loadDotEnv()
         guard TestEnv.isConfigured else {
             throw XCTSkip("POSTGRES_HOST not set. Copy .env.example to .env and configure connection.")
         }
