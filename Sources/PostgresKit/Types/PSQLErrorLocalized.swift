@@ -7,7 +7,7 @@ import PostgresNIO
 /// "PostgresNIO.PSQLError error 1". This extension extracts the actual
 /// server error message so callers that only see `Error.localizedDescription`
 /// still get a readable string.
-extension PSQLError: @retroactive LocalizedError {
+extension PSQLError: LocalizedError {
     public var errorDescription: String? {
         if let serverInfo {
             var result = serverInfo[.message] ?? String(describing: self)
