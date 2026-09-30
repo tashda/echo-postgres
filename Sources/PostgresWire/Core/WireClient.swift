@@ -6,18 +6,23 @@ import NIOPosix
 import PostgresNIO
 
 public final class PostgresWireClient: @unchecked Sendable {
-    private struct Pool {
+    struct Pool {
         let client: PostgresClient
         let runTask: Task<Void, Never>
         let expiresAt: Date?
+        /// Counts replacements, so a call can tell whether another one already replaced the pool.
+        var generation = 0
     }
 
-    /// Pools are replaced (not mutated) when a short-lived credential is about to expire.
-    private let pools: NIOLockedValueBox<Pool>
+    /// Pools are replaced (not mutated) when a short-lived credential is about to expire, and when
+    /// the host fails over (see WireClient+Failover.swift).
+    let pools: NIOLockedValueBox<Pool>
     private let rotation = NIOLockedValueBox<Task<Void, any Error>?>(nil)
-    private let configuration: PostgresWireConfiguration
+    let failoverTask = NIOLockedValueBox<Task<Void, any Error>?>(nil)
+    let configuration: PostgresWireConfiguration
+    let current: NIOLockedValueBox<PostgresWireConfiguration>
     /// The configuration in use: the selected host, the resolved `sslmode` and the current password.
-    public let resolvedConfiguration: PostgresWireConfiguration
+    public var resolvedConfiguration: PostgresWireConfiguration { current.withLockedValue { $0 } }
     let logger: Logger
 
     /// Credentials are refreshed this long before they expire.
@@ -27,12 +32,12 @@ public final class PostgresWireClient: @unchecked Sendable {
 
     private init(configuration: PostgresWireConfiguration, resolved: PostgresWireConfiguration, credential: PostgresCredential, logger: Logger) throws {
         self.configuration = configuration
-        self.resolvedConfiguration = resolved
+        self.current = NIOLockedValueBox(resolved)
         self.logger = logger
         self.pools = NIOLockedValueBox(try Self.makePool(resolved, expiresAt: credential.expiresAt, logger: logger))
     }
 
-    private static func makePool(_ configuration: PostgresWireConfiguration, expiresAt: Date?, logger: Logger) throws -> Pool {
+    static func makePool(_ configuration: PostgresWireConfiguration, expiresAt: Date?, logger: Logger) throws -> Pool {
         let client = PostgresClient(configuration: try configuration.makeClientConfiguration(), backgroundLogger: logger)
         return Pool(client: client, runTask: Task.detached { await client.run() }, expiresAt: expiresAt)
     }
@@ -75,7 +80,7 @@ public final class PostgresWireClient: @unchecked Sendable {
     }
 
     /// The current pool, replaced first when its credential is about to expire.
-    private func pool() async throws -> PostgresClient {
+    func pool() async throws -> PostgresClient {
         let current = pools.withLockedValue { $0 }
         guard let expiresAt = current.expiresAt, configuration.passwordProvider != nil,
               expiresAt.timeIntervalSinceNow < Self.rotationMargin else {
@@ -104,12 +109,14 @@ public final class PostgresWireClient: @unchecked Sendable {
         let credential = try await provider()
         var fresh = resolvedConfiguration
         fresh.password = credential.password
-        let replacement = try Self.makePool(fresh, expiresAt: credential.expiresAt, logger: logger)
+        var replacement = try Self.makePool(fresh, expiresAt: credential.expiresAt, logger: logger)
         let retired = pools.withLockedValue { box -> Pool in
             let old = box
+            replacement.generation = old.generation + 1
             box = replacement
             return old
         }
+        current.withLockedValue { $0 = fresh }
         logger.debug("Replaced the connection pool before its credential expires")
         Task.detached {
             try? await Task.sleep(for: Self.retiredPoolGrace)
@@ -120,8 +127,11 @@ public final class PostgresWireClient: @unchecked Sendable {
     public func withConnection<T>(
         _ operation: (WireConnection) async throws -> T
     ) async throws -> T {
-        try await pool().withConnection { connection in
-            try await operation(WireConnection(connection))
+        try await withFailover { client, entered in
+            try await client.withConnection { connection in
+                entered.withLockedValue { $0 = true }
+                return try await operation(WireConnection(connection))
+            }
         }
     }
 
@@ -130,7 +140,10 @@ public final class PostgresWireClient: @unchecked Sendable {
     }
 
     public func query(_ query: WireQuery, logger: Logger? = nil) async throws -> WireRowSequence {
-        try await pool().query(query.asPostgresQuery(), logger: logger ?? self.logger)
+        // A single statement on its own connection: rejected as read-only, it can be retried on the new primary.
+        try await withFailover(retriesReadOnlyRejection: true) { client, _ in
+            try await client.query(query.asPostgresQuery(), logger: logger ?? self.logger)
+        }
     }
 
     public func query(

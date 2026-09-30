@@ -70,6 +70,7 @@ let package = Package(
             name: "PostgresWire",
             dependencies: [
                 "PostgresNIO",
+                "_ConnectionPoolModule",
                 .target(name: "CGSSAPI", condition: .when(platforms: [.linux])),
                 .product(name: "Logging", package: "swift-log")
             ]

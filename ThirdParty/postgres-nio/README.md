@@ -28,3 +28,9 @@ PostgresWire: Apple's GSS framework on macOS, MIT Kerberos on Linux).
   `gssContinue` with the next token, and finishes on `ok`. Without a factory it refuses as before.
 - `New/PSQLError+Kerberos.swift` (new): `PSQLError.serverRequestedKerberos`, so the message can say
   that the server asks for Kerberos.
+
+Failover: the pool's circuit breaker time is configurable.
+
+- `Pool/PostgresClient.swift`: `Options.circuitBreakerTripAfter` (default 60 s as before), passed to
+  the connection pool. postgres-wire sets it to the connect timeout, so a server that can't be
+  reached fails over after seconds instead of a minute.

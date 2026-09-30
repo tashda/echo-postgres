@@ -113,6 +113,10 @@ public final class PostgresClient: Sendable, ServiceLifecycle.Service {
             /// postgres-wire: answers a server that asks for Kerberos (GSSAPI or SSPI).
             public var gssAuthenticatorFactory: PostgresGSSAuthenticatorFactory? = nil
 
+            /// postgres-wire: how long new connections may keep failing, with none open, before
+            /// waiting requests fail (`connectionCreationCircuitBreakerTripped`). PostgresNIO uses 60 s.
+            public var circuitBreakerTripAfter: Duration = .seconds(60)
+
             /// The minimum number of connections that the client shall keep open at any time, even if there is no
             /// demand. Default to `0`.
             ///
@@ -523,6 +527,7 @@ extension ConnectionPoolConfiguration {
         self.maximumConnectionSoftLimit = config.options.maximumConnections
         self.maximumConnectionHardLimit = config.options.maximumConnections
         self.idleTimeout = config.options.connectionIdleTimeout
+        self.circuitBreakerTripAfter = config.options.circuitBreakerTripAfter
     }
 }
 

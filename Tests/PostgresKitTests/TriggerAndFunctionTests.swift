@@ -63,10 +63,10 @@ final class TriggerAndFunctionTests: PostgresKitTestCase {
 
     func testSearchVectorTriggerUpdatesOnTitleChange() async throws {
         // Get a post
-        let postRows = try await client.simpleQuery("SELECT id FROM app.posts LIMIT 1")
-        var postId: Int64?
-        for try await id in postRows.decode(Int64.self) { postId = id }
-        guard let pid = postId else { return XCTFail("Should have at least one post") }
+        let postRows = try await client.simpleQuery("SELECT id, title FROM app.posts ORDER BY id DESC LIMIT 1")
+        var post: (id: Int64, title: String)?
+        for try await row in postRows.decode((Int64, String).self) { post = (row.0, row.1) }
+        guard let pid = post?.id, let originalTitle = post?.title else { return XCTFail("Should have at least one post") }
 
         // Update title with a unique word
         let uniqueWord = "xylophonetest\(UInt32.random(in: 0..<UInt32.max))"
@@ -82,6 +82,8 @@ final class TriggerAndFunctionTests: PostgresKitTestCase {
             XCTAssertTrue(v.contains(uniqueWord) || v.lowercased().contains(uniqueWord.lowercased()),
                          "search_vector should contain the updated word")
         }
+        // Other tests (full-text search) read the sample posts' titles: put it back.
+        _ = try await client.bulk.update(table: "app.posts", set: ["title": originalTitle], whereClause: "id = \(pid)")
     }
 
     // MARK: - Audit Trigger

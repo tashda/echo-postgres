@@ -31,6 +31,22 @@ final class ErrorIntegrationTests: PostgresKitTestCase {
 
     // MARK: - Unique Violation via Real INSERT
 
+    /// queryResult uses PostgresNIO's future-based API, whose errors used to lose their SQLSTATE.
+    func testQueryResultErrorsKeepTheirSQLState() async throws {
+        let table = uniqueName("qr")
+        _ = try await client.simpleQueryResult("CREATE TABLE \(table) (id int PRIMARY KEY)")
+        defer { Task { [client = self.client!] in _ = try? await client.simpleQueryResult("DROP TABLE IF EXISTS \(table)") } }
+        _ = try await client.simpleQueryResult("INSERT INTO \(table) VALUES (1)")
+        do {
+            _ = try await client.withConnection { try await $0.queryResult("INSERT INTO \(table) VALUES (1)") }
+            XCTFail("duplicate key")
+        } catch let error as PostgresError {
+            XCTAssertEqual(error.sqlState, "23505")
+            XCTAssertTrue(error.isUniqueViolation)
+            XCTAssertTrue(error.message.contains("\(table)_pkey"), error.message)
+        }
+    }
+
     func testUniqueViolationThrowsPostgresError() async throws {
         let table = uniqueName()
         defer { Task { [client = self.client!] in _ = try? await client.admin.dropTable(name: table, ifExists: true) } }

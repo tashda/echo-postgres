@@ -100,9 +100,36 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
         }
     }
 
+    /// From PostgresNIO's older `PostgresError.server` (thrown by its future-based query API): the
+    /// same fields as a `PSQLError`, so SQLSTATE, hint and position are kept.
+    internal init(legacyServerError error: PostgresMessage.Error) {
+        let fields = error.fields
+        var message = fields[.message] ?? error.description
+        if let constraint = fields[.constraintName] {
+            message += " (constraint: \(constraint))"
+        } else if let table = fields[.tableName] {
+            message += " (table: \(table))"
+        }
+        if let detail = fields[.detail], !detail.isEmpty { message += " - \(detail)" }
+        self.init(
+            message: message,
+            sqlState: fields[.sqlState],
+            severity: fields[.severity] ?? fields[.localizedSeverity],
+            serverInfo: [
+                "detail": fields[.detail], "hint": fields[.hint], "position": fields[.position],
+                "internalPosition": fields[.internalPosition], "message": fields[.message],
+                "schemaName": fields[.schemaName], "tableName": fields[.tableName],
+                "columnName": fields[.columnName], "constraintName": fields[.constraintName],
+                "routine": fields[.routine],
+            ].compactMapValues { $0 },
+            originalError: nil
+        )
+    }
+
     /// Convert any error into a PostgresError.
     internal static func from(_ error: any Error) -> PostgresError {
         if let psqlError = error as? PSQLError { return PostgresError(from: psqlError) }
+        if case .server(let message)? = error as? PostgresNIO.PostgresError { return PostgresError(legacyServerError: message) }
         if let postgresError = error as? PostgresError { return postgresError }
         if let ioError = error as? IOError { return PostgresError(message: PostgresErrorParsing.describeIOError(ioError)) }
         return PostgresError(message: error.localizedDescription)
@@ -111,6 +138,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
     /// Like ``from(_:)`` for driver errors (`PSQLError`, `IOError`); any other error is returned unchanged.
     internal static func fromDriver(_ error: any Error) -> any Error {
         if let psqlError = error as? PSQLError { return PostgresError(from: psqlError) }
+        if case .server(let message)? = error as? PostgresNIO.PostgresError { return PostgresError(legacyServerError: message) }
         if let ioError = error as? IOError { return PostgresError(message: PostgresErrorParsing.describeIOError(ioError)) }
         return error
     }
@@ -165,4 +193,9 @@ extension PostgresError: LocalizedError {
     public var helpAnchor: String? {
         sqlState.map { "https://www.postgresql.org/docs/current/errcodes-appendix.html#ERRCODES-\($0)" }
     }
+}
+
+extension PostgresError: PostgresServerErrorCode {
+    /// The server's SQLSTATE, for PostgresWire's failover.
+    public var serverSQLState: String? { sqlState }
 }

@@ -256,6 +256,9 @@ public struct PostgresWireConfiguration: Sendable {
         configuration.options.minimumConnections = max(0, pool.minimumConnections)
         configuration.options.maximumConnections = max(1, max(pool.minimumConnections, pool.maximumConnections))
         configuration.options.connectionIdleTimeout = pool.idleTimeout
+        // A server that can't be reached for connectTimeout counts as down, so the client can move
+        // to another host (or say so) instead of waiting PostgresNIO's 60 s.
+        configuration.options.circuitBreakerTripAfter = .seconds(Int64(max(connectTimeout, 1)))
         configuration.options.keepAliveBehavior = pool.keepAliveFrequency.map { .init(frequency: $0) }
         return configuration
     }
