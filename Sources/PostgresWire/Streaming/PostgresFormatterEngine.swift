@@ -106,7 +106,20 @@ public actor PostgresFormatterEngine {
         case .custom(let formatter):
             return formatter.string(from: date)
         case .relative:
-            return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+            // RelativeDateTimeFormatter is not available in Foundation on Linux.
+            let interval = date.timeIntervalSince(Date())
+            let seconds = abs(interval)
+            let description: String
+            if seconds < 60 {
+                description = "\(Int(seconds)) seconds"
+            } else if seconds < 3600 {
+                description = "\(Int(seconds / 60)) minutes"
+            } else if seconds < 86400 {
+                description = "\(Int(seconds / 3600)) hours"
+            } else {
+                description = "\(Int(seconds / 86400)) days"
+            }
+            return interval < 0 ? "\(description) ago" : "in \(description)"
         }
     }
 
