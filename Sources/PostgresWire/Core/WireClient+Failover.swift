@@ -87,12 +87,47 @@ extension PostgresWireClient {
         current.withLockedValue { $0 = opened.configuration }
         let from = "\(previous.host):\(previous.port)", to = "\(opened.configuration.host):\(opened.configuration.port)"
         logger.warning("Failed over from \(from) to \(to) after: \(String(describing: error))")
+        let change = PostgresHostChange(
+            from: PostgresHost(host: previous.host, port: previous.port),
+            to: PostgresHost(host: opened.configuration.host, port: opened.configuration.port),
+            reason: PostgresServerUnreachableError(previous: previous, underlying: error).errorDescription ?? String(describing: error),
+            date: Date())
+        for observer in hostObservers.withLockedValue({ Array($0.values) }) { observer.yield(change) }
         // Leases on the retired pool fail by themselves; give running work a moment, then stop it.
         Task.detached {
             try? await Task.sleep(for: .seconds(30))
             retired.runTask.cancel()
         }
     }
+}
+
+extension PostgresWireClient {
+    /// The server the pool is connected to now.
+    public var currentHost: PostgresHost {
+        let configuration = resolvedConfiguration
+        return PostgresHost(host: configuration.unixSocketPath ?? configuration.host, port: configuration.port)
+    }
+
+    /// Reports each time the pool fails over to another server (see ``currentHost``). Each call
+    /// returns a new stream; it ends when the listener stops iterating.
+    public func hostChanges() -> AsyncStream<PostgresHostChange> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<PostgresHostChange>.makeStream(bufferingPolicy: .bufferingNewest(8))
+        continuation.onTermination = { [weak self] _ in
+            _ = self?.hostObservers.withLockedValue { $0.removeValue(forKey: id) }
+        }
+        hostObservers.withLockedValue { $0[id] = continuation }
+        return stream
+    }
+}
+
+/// The pool moved from one server to another after its server went away or turned read-only.
+public struct PostgresHostChange: Sendable, Equatable {
+    public let from: PostgresHost
+    public let to: PostgresHost
+    /// Why: the error that made the pool choose again, in words.
+    public let reason: String
+    public let date: Date
 }
 
 /// The pool's server went away and no configured host can be reached now.

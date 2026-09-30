@@ -141,7 +141,60 @@ final class TLSIntegrationTests: PostgresKitTestCase {
             XCTFail("a wrong key password must fail")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("key password"), error.localizedDescription)
+            XCTAssertEqual(certificateProblem(error), .wrongKeyPassword)
         }
+    }
+
+    func testEncryptedKeyWithoutItsPasswordAsksForIt() async {
+        do {
+            _ = try await connect(configuration(username: "cert_user", password: nil, .verifyFull) {
+                $0.sslRootCertPath = file("ca.crt")
+                $0.sslCertPath = file("client.crt")
+                $0.sslKeyPath = file("client-encrypted.key")
+            })
+            XCTFail("an encrypted key needs its password")
+        } catch {
+            XCTAssertEqual(certificateProblem(error), .keyNeedsPassword, error.localizedDescription)
+        }
+    }
+
+    func testKeyNeedsPasswordReadsTheFile() {
+        XCTAssertFalse(PostgresClientCertificate.keyNeedsPassword(atPath: file("client.key")))
+        XCTAssertTrue(PostgresClientCertificate.keyNeedsPassword(atPath: file("client-encrypted.key")))
+        XCTAssertTrue(PostgresClientCertificate.keyNeedsPassword(atPath: file("client.p12")))
+        XCTAssertTrue(PostgresClientCertificate.keyNeedsPassword(atPath: file("client-legacy.pfx")))
+        XCTAssertFalse(PostgresClientCertificate.keyNeedsPassword(atPath: file("no-such-file.key")))
+    }
+
+    func testPKCS12FileSignsInWithoutASeparateKey() async throws {
+        for bundle in ["client.p12", "client-legacy.pfx"] {
+            let outcome = try await connect(configuration(username: "cert_user", password: nil, .verifyFull) {
+                $0.sslRootCertPath = file("ca.crt")
+                $0.sslCertPath = file(bundle)
+                $0.sslKeyPassword = "correct-horse"
+            })
+            XCTAssertEqual(outcome.user, "cert_user", bundle)
+        }
+    }
+
+    func testPKCS12PasswordProblemsSaySo() async {
+        for (password, expected) in [(nil, PostgresTLSFileError.Kind.keyNeedsPassword), ("wrong", .wrongKeyPassword)] {
+            do {
+                _ = try await connect(configuration(username: "cert_user", password: nil, .verifyFull) {
+                    $0.sslRootCertPath = file("ca.crt")
+                    $0.sslCertPath = file("client.p12")
+                    $0.sslKeyPassword = password
+                })
+                XCTFail("the .p12 needs its password")
+            } catch {
+                XCTAssertEqual(certificateProblem(error), expected, error.localizedDescription)
+            }
+        }
+    }
+
+    private func certificateProblem(_ error: any Error) -> PostgresTLSFileError.Kind? {
+        if case .clientCertificate(let file)? = (error as? PostgresError)?.connectionProblem { return file.kind }
+        return nil
     }
 
     // MARK: - Sessions over TLS

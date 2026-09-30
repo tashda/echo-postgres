@@ -33,6 +33,19 @@ public enum PostgresKerberos {
 
 /// Why Kerberos sign-in failed, in words someone can act on, with the Kerberos library's own text.
 public struct PostgresKerberosError: Error, LocalizedError, Sendable {
+    public enum Kind: Sendable, Equatable {
+        /// There is no ticket (no kinit, no Ticket Viewer sign-in).
+        case noTicket
+        /// The ticket has expired.
+        case expired
+        /// The realm has no principal for the database service (wrong host or service name).
+        case unknownService
+        /// The computer's clock differs too much from the KDC's.
+        case clockSkew
+        case other
+    }
+
+    public let kind: Kind
     public let message: String
     /// The GSSAPI major and minor status texts.
     public let details: String
@@ -59,7 +72,7 @@ final class GSSAPIAuthenticator: PostgresGSSAuthenticator, @unchecked Sendable {
             return gss_import_name(&minor, &nameBuffer, GSSAPIAuthenticator.hostBasedService, &imported)
         }
         guard !Self.isError(major), let imported else {
-            throw PostgresKerberosError(message: "The Kerberos service name \(servicePrincipal) is not valid.",
+            throw PostgresKerberosError(kind: .unknownService, message: "The Kerberos service name \(servicePrincipal) is not valid.",
                                         details: Self.statusText(major: major, minor: minor))
         }
         target = imported
@@ -97,8 +110,8 @@ final class GSSAPIAuthenticator: PostgresGSSAuthenticator, @unchecked Sendable {
         }
         defer { var releaseMinor: OM_uint32 = 0; _ = gss_release_buffer(&releaseMinor, &output) }
         guard !Self.isError(major) else {
-            throw PostgresKerberosError(message: Self.message(major: major, minor: minor, principal: principal),
-                                        details: Self.statusText(major: major, minor: minor))
+            let (kind, message) = Self.message(major: major, minor: minor, principal: principal)
+            throw PostgresKerberosError(kind: kind, message: message, details: Self.statusText(major: major, minor: minor))
         }
         guard output.length > 0, let value = output.value else { return nil }
         return Array(UnsafeRawBufferPointer(start: value, count: output.length))
@@ -123,7 +136,7 @@ final class GSSAPIAuthenticator: PostgresGSSAuthenticator, @unchecked Sendable {
     /// The routine error (GSS_ROUTINE_ERROR >> 16): 7 is GSS_S_NO_CRED, 13 GSS_S_FAILURE.
     private static func routineError(_ major: OM_uint32) -> OM_uint32 { (major >> 16) & 0xFF }
 
-    private static func message(major: OM_uint32, minor: OM_uint32, principal: String) -> String {
+    private static func message(major: OM_uint32, minor: OM_uint32, principal: String) -> (PostgresKerberosError.Kind, String) {
         let details = statusText(major: major, minor: minor).lowercased()
         // No ticket: GSS_S_NO_CRED, or how MIT ("No Kerberos credentials available", "Credentials cache
         // file ... not found") and Heimdal ("get-pricipal open(...): No such file") say it.
@@ -132,20 +145,20 @@ final class GSSAPIAuthenticator: PostgresGSSAuthenticator, @unchecked Sendable {
             || (details.contains("cache") && details.contains("not found"))
             || details.contains("get-pricipal") || details.contains("get-principal")
         if noTicket {
-            return "No Kerberos ticket. Sign in to Kerberos first (kinit, or Ticket Viewer on a Mac)."
+            return (.noTicket, "No Kerberos ticket. Sign in to Kerberos first (kinit, or Ticket Viewer on a Mac).")
         }
         // MIT: "Server x not found in Kerberos database"; Heimdal (macOS): "LOOKING_UP_SERVER".
         if details.contains("not found in kerberos database") || details.contains("server not found")
             || details.contains("unknown server") || details.contains("looking_up_server") {
-            return "The Kerberos realm does not know the database service \(principal). Check the host name and the service name."
+            return (.unknownService, "The Kerberos realm does not know the database service \(principal). Check the host name and the service name.")
         }
-        if details.contains("expired") {
-            return "The Kerberos ticket has expired. Sign in to Kerberos again (kinit)."
+        if routineError(major) == 11 || details.contains("expired") {
+            return (.expired, "The Kerberos ticket has expired. Sign in to Kerberos again (kinit).")
         }
         if details.contains("clock skew") {
-            return "This computer's clock differs too much from the Kerberos server's."
+            return (.clockSkew, "This computer's clock differs too much from the Kerberos server's.")
         }
-        return "Kerberos sign-in failed for \(principal)."
+        return (.other, "Kerberos sign-in failed for \(principal).")
     }
 
     private static func statusText(major: OM_uint32, minor: OM_uint32) -> String {

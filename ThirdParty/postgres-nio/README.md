@@ -34,3 +34,10 @@ Failover: the pool's circuit breaker time is configurable.
 - `Pool/PostgresClient.swift`: `Options.circuitBreakerTripAfter` (default 60 s as before), passed to
   the connection pool. postgres-wire sets it to the connect timeout, so a server that can't be
   reached fails over after seconds instead of a minute.
+
+No empty passwords: a server asking for a cleartext password when none was configured.
+
+- `New/Connection State Machine/AuthenticationStateMachine.swift`: `plaintext` without a password
+  fails with `authMechanismRequiresPassword`, as `md5` and SCRAM already did (libpq: "no password
+  supplied"), instead of sending an empty password. A Kerberos-only sign-in can then say that the
+  server asks for a password.

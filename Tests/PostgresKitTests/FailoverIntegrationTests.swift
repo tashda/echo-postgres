@@ -90,6 +90,39 @@ final class FailoverIntegrationTests: PostgresKitTestCase {
         XCTAssertEqual(client.wire.resolvedConfiguration.port, portB)
     }
 
+    func testHostChangesReportsWhereThePoolMoved() async throws {
+        let client = try await PostgresClient.connect(configuration: configuration(), logger: logger)
+        defer { client.close() }
+        _ = try await serverPort(client)
+        XCTAssertEqual(client.currentHost, PostgresHost(host: "127.0.0.1", port: portA))
+        let changes = client.hostChanges()
+        let first = Task { () -> PostgresHostChange? in
+            for await change in changes { return change }
+            return nil
+        }
+
+        try docker("stop", "-t", "0", containerA)
+        _ = try await serverPort(client)
+        let reported = await first.value
+        let change = try XCTUnwrap(reported)
+        XCTAssertEqual(change.from, PostgresHost(host: "127.0.0.1", port: portA))
+        XCTAssertEqual(change.to, PostgresHost(host: "127.0.0.1", port: portB))
+        XCTAssertTrue(change.reason.contains("Can't reach the server"), change.reason)
+        XCTAssertEqual(client.currentHost, change.to)
+    }
+
+    func testProbeHostsChecksEveryServer() async throws {
+        let both = await PostgresClient.probeHosts(configuration: configuration(), logger: logger)
+        XCTAssertEqual(both.map(\.host.port), [portA, portB])
+        XCTAssertEqual(both.map(\.role), [.primary, .primary], "neither fixture server is in recovery")
+
+        try docker("stop", "-t", "0", containerB)
+        let oneDown = await PostgresClient.probeHosts(configuration: configuration(), logger: logger)
+        XCTAssertEqual(oneDown.first?.role, .primary)
+        XCTAssertNil(oneDown.last?.role)
+        XCTAssertNotNil(oneDown.last?.error)
+    }
+
     func testReadWritePoolMovesOffADemotedPrimary() async throws {
         let client = try await PostgresClient.connect(configuration: configuration(.readWrite), logger: logger)
         defer { client.close() }

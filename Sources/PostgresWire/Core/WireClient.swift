@@ -19,6 +19,8 @@ public final class PostgresWireClient: @unchecked Sendable {
     let pools: NIOLockedValueBox<Pool>
     private let rotation = NIOLockedValueBox<Task<Void, any Error>?>(nil)
     let failoverTask = NIOLockedValueBox<Task<Void, any Error>?>(nil)
+    /// Listeners of ``hostChanges()``.
+    let hostObservers = NIOLockedValueBox<[UUID: AsyncStream<PostgresHostChange>.Continuation]>([:])
     let configuration: PostgresWireConfiguration
     let current: NIOLockedValueBox<PostgresWireConfiguration>
     /// The configuration in use: the selected host, the resolved `sslmode` and the current password.
@@ -44,6 +46,7 @@ public final class PostgresWireClient: @unchecked Sendable {
 
     deinit {
         pools.withLockedValue { $0.runTask.cancel() }
+        for observer in hostObservers.withLockedValue({ Array($0.values) }) { observer.finish() }
     }
 
     public static func connect(
@@ -77,6 +80,8 @@ public final class PostgresWireClient: @unchecked Sendable {
     public func close() {
         pools.withLockedValue { $0.runTask.cancel() }
         rotation.withLockedValue { $0?.cancel() }
+        // Finished outside the lock: finishing runs onTermination, which takes it.
+        for observer in hostObservers.withLockedValue({ Array($0.values) }) { observer.finish() }
     }
 
     /// The current pool, replaced first when its credential is about to expire.

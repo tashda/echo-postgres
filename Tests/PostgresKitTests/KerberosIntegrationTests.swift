@@ -62,6 +62,40 @@ final class KerberosIntegrationTests: PostgresKitTestCase {
             XCTFail("there is no ticket in the empty cache")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("No Kerberos ticket"), error.localizedDescription)
+            guard case .kerberos(let kerberos)? = (error as? PostgresError)?.connectionProblem else {
+                return XCTFail("expected a Kerberos connection problem: \(error)")
+            }
+            XCTAssertEqual(kerberos.kind, .noTicket)
+        }
+    }
+
+    func testCurrentTicketNamesAliceAndWhenItExpires() throws {
+        guard case .valid(let principal, let expiresAt) = PostgresKerberos.currentTicket() else {
+            return XCTFail("alice has a ticket: \(PostgresKerberos.currentTicket())")
+        }
+        XCTAssertEqual(principal, "alice@EXAMPLE.TEST")
+        XCTAssertEqual(PostgresKerberos.currentTicket().userName, "alice")
+        let expiry = try XCTUnwrap(expiresAt)
+        XCTAssertGreaterThan(expiry, Date())
+    }
+
+    func testCurrentTicketIsNoneWithAnEmptyCache() throws {
+        let cache = try XCTUnwrap(ProcessInfo.processInfo.environment["KRB5CCNAME"])
+        let empty = FileManager.default.temporaryDirectory.appendingPathComponent("no-ticket-\(UUID().uuidString)").path
+        setenv("KRB5CCNAME", "FILE:\(empty)", 1)
+        defer { setenv("KRB5CCNAME", cache, 1) }
+        XCTAssertEqual(PostgresKerberos.currentTicket(), .none)
+    }
+
+    func testAServerThatAsksForAPasswordSaysSo() async {
+        do {
+            let client = try await PostgresClient.connect(configuration: configuration(username: "postgres"), logger: logger)
+            client.close()
+            XCTFail("postgres signs in with a password, and none was given")
+        } catch {
+            guard case .passwordRequired? = (error as? PostgresError)?.connectionProblem else {
+                return XCTFail("expected passwordRequired: \(error)")
+            }
         }
     }
 

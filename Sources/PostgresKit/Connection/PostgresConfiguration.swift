@@ -30,11 +30,12 @@ public struct PostgresConfiguration: Sendable {
     public var sslMode: PostgresSSLMode
     /// Path to a PEM-encoded root CA certificate file for verify-ca / verify-full modes.
     public var sslRootCertPath: String?
-    /// Path to a PEM-encoded client certificate file for mTLS.
+    /// Path to a PEM-encoded client certificate file for mTLS, or a PKCS#12 file (`.p12`/`.pfx`)
+    /// holding the certificate and its key. See ``PostgresClientCertificate``.
     public var sslCertPath: String?
-    /// Path to a PEM-encoded client private key file for mTLS.
+    /// Path to a PEM- or DER-encoded client private key file for mTLS (unused with a PKCS#12 file).
     public var sslKeyPath: String?
-    /// The password protecting ``sslKeyPath`` (libpq `sslpassword`), if the key is encrypted.
+    /// The password protecting ``sslKeyPath`` or the PKCS#12 file (libpq `sslpassword`).
     public var sslKeyPassword: String?
     /// Kerberos service name (libpq `krbsrvname`); `nil` refuses Kerberos. See ``PostgresKerberos``.
     public var kerberosServiceName: String? = "postgres"

@@ -61,6 +61,10 @@ struct AuthenticationStateMachine {
                 self.state = .passwordAuthenticationSent
                 return .sendPassword(.md5(salt: salt), self.authContext)
             case .plaintext:
+                // postgres-wire: like libpq ("no password supplied"), don't send an empty password.
+                guard self.authContext.password != nil else {
+                    return self.setAndFireError(PSQLError(code: .authMechanismRequiresPassword))
+                }
                 self.state = .passwordAuthenticationSent
                 return .sendPassword(.cleartext, authContext)
             case .kerberosV5:

@@ -33,13 +33,19 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
     /// Original PSQLError (kept for compatibility).
     internal let originalError: PSQLError?
 
+    /// Why a connection could not be made, when the driver knows more than ``message`` says (a
+    /// missing Kerberos ticket, a wrong key password, a server that asks for a password).
+    public let connectionProblem: PostgresConnectionProblem?
+
     internal init(
         message: String,
         sqlState: String? = nil,
         severity: String? = nil,
         serverInfo: [String: String]? = nil,
-        originalError: PSQLError? = nil
+        originalError: PSQLError? = nil,
+        connectionProblem: PostgresConnectionProblem? = nil
     ) {
+        self.connectionProblem = connectionProblem ?? originalError.flatMap(PostgresConnectionProblem.init(psqlError:))
         self.message = message
         self.sqlState = sqlState
         self.severity = severity
@@ -55,6 +61,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
     /// Create from PSQLError with enhanced parsing.
     internal init(from psqLError: PSQLError) {
         self.originalError = psqLError
+        self.connectionProblem = PostgresConnectionProblem(psqlError: psqLError)
 
         if let serverInfo = psqLError.serverInfo {
             self.sqlState = serverInfo[.sqlState]
@@ -132,7 +139,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
         if case .server(let message)? = error as? PostgresNIO.PostgresError { return PostgresError(legacyServerError: message) }
         if let postgresError = error as? PostgresError { return postgresError }
         if let ioError = error as? IOError { return PostgresError(message: PostgresErrorParsing.describeIOError(ioError)) }
-        return PostgresError(message: error.localizedDescription)
+        return PostgresError(message: error.localizedDescription, connectionProblem: PostgresConnectionProblem(error: error))
     }
 
     /// Like ``from(_:)`` for driver errors (`PSQLError`, `IOError`); any other error is returned unchanged.
@@ -153,7 +160,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
     internal func withHint(_ hint: String) -> PostgresError {
         var info = serverInfo ?? [:]
         info["hint"] = hint
-        return PostgresError(message: message, sqlState: sqlState, severity: severity, serverInfo: info, originalError: originalError)
+        return PostgresError(message: message, sqlState: sqlState, severity: severity, serverInfo: info, originalError: originalError, connectionProblem: connectionProblem)
     }
 
     /// Get detailed debugging information.
@@ -198,4 +205,30 @@ extension PostgresError: LocalizedError {
 extension PostgresError: PostgresServerErrorCode {
     /// The server's SQLSTATE, for PostgresWire's failover.
     public var serverSQLState: String? { sqlState }
+}
+
+/// What stopped a connection, for a client that offers the fix (a ticket viewer, the key password
+/// field, the password field).
+public enum PostgresConnectionProblem: Sendable {
+    /// Kerberos sign-in failed; see the error's ``PostgresKerberosError/kind``.
+    case kerberos(PostgresKerberosError)
+    /// The client certificate or key could not be opened; see ``PostgresTLSFileError/kind``.
+    case clientCertificate(PostgresTLSFileError)
+    /// The server asks for a password and none was given (for example, it does not accept Kerberos).
+    case passwordRequired
+
+    init?(error: any Error) {
+        switch error {
+        case let kerberos as PostgresKerberosError: self = .kerberos(kerberos)
+        case let file as PostgresTLSFileError: self = .clientCertificate(file)
+        case let psql as PSQLError: self.init(psqlError: psql)
+        default: return nil
+        }
+    }
+
+    init?(psqlError: PSQLError) {
+        if psqlError.code == .authMechanismRequiresPassword { self = .passwordRequired; return }
+        guard let underlying = psqlError.underlying, !(underlying is PSQLError) else { return nil }
+        self.init(error: underlying)
+    }
 }

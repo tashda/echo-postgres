@@ -22,6 +22,11 @@ cd "$certs"
   openssl req -new -nodes -newkey rsa:2048 -subj "/CN=cert_user" -keyout client.key -out client.csr
   openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 30 -out client.crt
   openssl pkcs8 -topk8 -in client.key -out client-encrypted.key -passout pass:correct-horse -v2 aes-256-cbc
+  # The certificate and key in one PKCS#12 file, as IT departments hand them out: modern (AES) and legacy (3DES).
+  openssl pkcs12 -export -in client.crt -inkey client.key -out client.p12 -passout pass:correct-horse \
+    -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
+  openssl pkcs12 -export -in client.crt -inkey client.key -out client-legacy.pfx -passout pass:correct-horse \
+    -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES
   # A second CA that signed nothing on the server: verify-ca with it must fail.
   openssl req -x509 -new -nodes -newkey rsa:2048 -days 30 -subj "/CN=unrelated CA" -keyout other-ca.key -out other-ca.crt
 } >/dev/null 2>&1

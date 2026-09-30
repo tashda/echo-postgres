@@ -55,7 +55,7 @@ extension PostgresWireClient {
     }
 
     /// Connects once, or for `sslmode=allow` twice (plain, then TLS if the server insists on encryption).
-    private static func openWithSSLFallback(
+    static func openWithSSLFallback(
         _ configuration: PostgresWireConfiguration,
         id: Int,
         logger: Logger

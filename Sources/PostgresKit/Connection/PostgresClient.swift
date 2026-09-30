@@ -53,6 +53,22 @@ public final class PostgresClient: @unchecked Sendable {
     /// Explicitly close all connections.
     public func close() { wire.close() }
 
+    /// The server this client's pool is connected to now. With several configured hosts it can
+    /// change after a failover; ``hostChanges()`` reports each change.
+    public var currentHost: PostgresHost { wire.currentHost }
+
+    /// Reports each time the pool fails over to another configured host.
+    public func hostChanges() -> AsyncStream<PostgresHostChange> { wire.hostChanges() }
+
+    /// Connects to every configured host and reports whether each is a primary or a standby (for a
+    /// connection test with several servers). Errors are translated like ``connect(configuration:logger:)``'s.
+    public static func probeHosts(
+        configuration: PostgresConfiguration,
+        logger: Logger = .init(label: "postgres-kit")
+    ) async -> [PostgresHostProbe] {
+        await PostgresWireClient.probeHosts(configuration: configuration.makeWireConfiguration(), logger: logger)
+    }
+
     /// Borrow a single connection for multi-step operations (e.g., transactions).
     public func withConnection<T>(
         _ body: @Sendable (PostgresConnection) async throws -> T
