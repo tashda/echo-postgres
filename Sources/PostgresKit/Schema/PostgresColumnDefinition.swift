@@ -1,3 +1,4 @@
+import PostgresWire
 import Foundation
 
 /// Defines a column within a PostgreSQL table.
@@ -66,17 +67,17 @@ public extension PostgresColumnDefinition {
 
     /// Unbounded TEXT type.
     static func text(name: String, nullable: Bool = true, defaultValue: String? = nil) -> PostgresColumnDefinition {
-        PostgresColumnDefinition(name: name, dataType: "TEXT", nullable: nullable, defaultValue: defaultValue.map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" })
+        PostgresColumnDefinition(name: name, dataType: "TEXT", nullable: nullable, defaultValue: defaultValue.map(PostgresQuoting.quoteLiteral))
     }
 
     /// Variable-length character string with limit.
     static func varchar(name: String, length: Int = 255, nullable: Bool = true, defaultValue: String? = nil) -> PostgresColumnDefinition {
-        PostgresColumnDefinition(name: name, dataType: "VARCHAR(\(length))", nullable: nullable, defaultValue: defaultValue.map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" })
+        PostgresColumnDefinition(name: name, dataType: "VARCHAR(\(length))", nullable: nullable, defaultValue: defaultValue.map(PostgresQuoting.quoteLiteral))
     }
 
     /// Fixed-length character string.
     static func char(name: String, length: Int = 1, nullable: Bool = true, defaultValue: String? = nil) -> PostgresColumnDefinition {
-        PostgresColumnDefinition(name: name, dataType: "CHAR(\(length))", nullable: nullable, defaultValue: defaultValue.map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" })
+        PostgresColumnDefinition(name: name, dataType: "CHAR(\(length))", nullable: nullable, defaultValue: defaultValue.map(PostgresQuoting.quoteLiteral))
     }
 
     /// BOOLEAN type.
@@ -151,6 +152,6 @@ public extension PostgresColumnDefinition {
 
     /// Use a custom (e.g., enum) type.
     static func enumType(name: String, typeName: String, nullable: Bool = true, defaultValue: String? = nil) -> PostgresColumnDefinition {
-        PostgresColumnDefinition(name: name, dataType: typeName, nullable: nullable, defaultValue: defaultValue.map { "'\($0)'" })
+        PostgresColumnDefinition(name: name, dataType: typeName, nullable: nullable, defaultValue: defaultValue.map(PostgresQuoting.quoteLiteral))
     }
 }

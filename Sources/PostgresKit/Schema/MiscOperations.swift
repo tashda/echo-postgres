@@ -21,7 +21,7 @@ public extension PostgresAdminClient {
             "stype = \(stype)"
         ]
         if let initcond {
-            clauses.append("initcond = '\(initcond)'")
+            clauses.append("initcond = \(client.quoteLiteral(initcond))")
         }
         let sql = "CREATE AGGREGATE \(qualifiedName)(\(inputType)) (\(clauses.joined(separator: ", ")))"
         return try await client.executeDDL(sql)

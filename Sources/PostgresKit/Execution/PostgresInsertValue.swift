@@ -1,3 +1,4 @@
+import PostgresWire
 import Foundation
 
 /// Structured insert values for cases that cannot be represented as plain bind parameters.
@@ -104,7 +105,7 @@ extension PostgresInsertValue: ExpressibleByNilLiteral {
 }
 
 internal func quoteLiteralSQL(_ literal: String) -> String {
-    "'\(literal.replacingOccurrences(of: "'", with: "''"))'"
+    "\(PostgresQuoting.quoteLiteral(literal))"
 }
 
 internal func quoteTypeNameSQL(_ typeName: String) -> String {

@@ -39,7 +39,7 @@ public extension PostgresBulkClient {
         let setClause = set.map { (column, value) in
             let quotedColumn = client.quoteIdentifier(column)
             if let stringValue = value as? String {
-                return "\(quotedColumn) = '\(stringValue.replacingOccurrences(of: "'", with: "''"))'"
+                return "\(quotedColumn) = \(PostgresQuoting.quoteLiteral(stringValue))"
             } else {
                 return "\(quotedColumn) = \(value)"
             }

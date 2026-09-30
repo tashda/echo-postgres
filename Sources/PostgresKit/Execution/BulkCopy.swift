@@ -1,12 +1,15 @@
 import Foundation
 import Logging
+import NIOCore
 import PostgresWire
 
 /// High-level bulk data movement (COPY) operations.
 public struct PostgresBulkCopy: @unchecked Sendable {
     public struct Options: Sendable {
         public var chunkSizeBytes: Int = 64 * 1024
+        /// Unused since `copyIn` uses the COPY protocol; kept for source compatibility.
         public var insertBatchSize: Int = 500
+        /// NULL string used when the statement does not specify one.
         public var nullString: String? = nil
         public init(chunkSizeBytes: Int = 64 * 1024, insertBatchSize: Int = 500, nullString: String? = nil) {
             self.chunkSizeBytes = chunkSizeBytes
@@ -25,112 +28,109 @@ public struct PostgresBulkCopy: @unchecked Sendable {
         self.options = options
     }
 
-    /// Execute COPY ... TO STDOUT and return an async byte stream.
+    /// Run `COPY table|(query) TO STDOUT` in CSV or text format and stream the output.
+    ///
+    /// Rows are read with a regular query and rendered by ``PostgresBinaryFormatter``, so every type
+    /// is written in its Postgres text form; NULL and empty strings stay distinguishable.
     public func copyOut(sql: String) async throws -> AsyncThrowingStream<Data, Error> {
         let parsed = try CopyStatement.parse(sql: sql)
         guard parsed.direction == .out else { throw PostgresKitError.notSupported("Expected COPY ... TO STDOUT") }
-        guard parsed.format == .csv else { throw PostgresKitError.notSupported("Only CSV format supported") }
 
         let chunkSize = max(16 * 1024, options.chunkSizeBytes)
+        let writer = CSVWriter(delimiter: parsed.delimiter, quote: parsed.quote, nullString: parsed.nullString ?? options.nullString ?? "")
+        let client = self.client
         return AsyncThrowingStream<Data, Error> { continuation in
-            Task {
+            let task = Task {
                 do {
-                    var buffer = Data(); buffer.reserveCapacity(chunkSize)
-                    var wroteHeader = false
-                    let selectSQL = try await parsed.selectSQL(usingClient: client)
-                    let rows = try await client.simpleQuery(selectSQL)
-                    for try await row in rows {
-                        if parsed.header && !wroteHeader {
-                            buffer.append(Self.csvLine(row.map { $0.columnName }))
-                            wroteHeader = true
+                    let format = parsed.format
+                    let delimiter = parsed.delimiter
+                    let header = parsed.header
+                    let selectSQL = parsed.selectSQL
+                    let remainder = try await client.withConnection { connection -> Data in
+                        let formatter = PostgresCellFormatter()
+                        var buffer = Data()
+                        buffer.reserveCapacity(chunkSize)
+                        var wroteHeader = false
+                        func line(_ fields: [String?]) -> String {
+                            format == .csv ? writer.line(fields) : CSVWriter.textLine(fields, delimiter: delimiter)
                         }
-                        var fields: [String] = []
-                        for cell in row {
-                            if var bb = cell.bytes, let data = bb.readData(length: bb.readableBytes) {
-                                fields.append(String(data: data, encoding: .utf8) ?? (options.nullString ?? ""))
-                            } else { fields.append(options.nullString ?? "") }
+                        for try await row in try await connection.simpleQuery(selectSQL) {
+                            if header && !wroteHeader {
+                                buffer.append(contentsOf: line(row.map { $0.columnName }).utf8)
+                                wroteHeader = true
+                            }
+                            buffer.append(contentsOf: line(row.map { formatter.stringValue(for: $0) }).utf8)
+                            if buffer.count >= chunkSize {
+                                continuation.yield(buffer)
+                                buffer.removeAll(keepingCapacity: true)
+                            }
                         }
-                        buffer.append(Self.csvLine(fields))
-                        if buffer.count >= chunkSize {
-                            continuation.yield(buffer)
-                            buffer.removeAll(keepingCapacity: true)
-                        }
+                        return buffer
                     }
-                    if !buffer.isEmpty { continuation.yield(buffer) }
+                    if !remainder.isEmpty { continuation.yield(remainder) }
                     continuation.finish()
-                } catch { continuation.finish(throwing: error) }
+                } catch {
+                    continuation.finish(throwing: PostgresError.from(error))
+                }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
-    /// Execute COPY ... FROM STDIN consuming an async byte stream.
+    /// Run `COPY table [(columns)] FROM STDIN` in CSV or text format, streaming `source` to the server
+    /// over the COPY protocol. The load is one statement: either every row is stored or none is.
+    ///
+    /// CSV input is parsed client-side (RFC 4180, including quoted multi-line fields) and re-encoded
+    /// as COPY text; text input is passed through unchanged.
     public func copyIn<S: AsyncSequence>(sql: String, source: S) async throws where S.Element == Data {
-        var parsed = try CopyStatement.parse(sql: sql)
-        guard parsed.direction == .`in` else { throw PostgresKitError.notSupported("Expected COPY ... FROM STDIN") }
-        guard parsed.format == .csv else { throw PostgresKitError.notSupported("Only CSV format supported") }
+        let parsed = try CopyStatement.parse(sql: sql)
+        guard parsed.direction == .in, let table = parsed.table else {
+            throw PostgresKitError.notSupported("Expected COPY table FROM STDIN")
+        }
+        let chunkSize = max(16 * 1024, options.chunkSizeBytes)
+        let logger = self.logger
 
-        let (schema, table) = try parsed.resolveTable()
-        let columns = try await client.metadata.listColumns(schema: schema ?? "public", table: table)
-        let columnList = columns.map { CopyStatement.quoteIdent($0.name) }.joined(separator: ", ")
-        let insertPrefix = "INSERT INTO \(CopyStatement.qualify(schema: schema, table: table)) (\(columnList)) VALUES "
-
-        var accumulator = Data()
-        var rows: [[String?]] = []
-        let batchSize = max(50, options.insertBatchSize)
-
-        func flushBatch() async throws {
-            guard !rows.isEmpty else { return }
-            var valuesSQL: [String] = []
-            for row in rows {
-                var literals: [String] = []
-                for (idx, value) in row.enumerated() {
-                    if let value {
-                        let escaped = value.replacingOccurrences(of: "'", with: "''")
-                        let cast = idx < columns.count ? "::\(columns[idx].dataType)" : ""
-                        literals.append("'\(escaped)'\(cast)")
-                    } else {
-                        literals.append("NULL")
+        do {
+            try await client.wire.withConnection { connection in
+                switch parsed.format {
+                case .text:
+                    guard let delimiter = parsed.delimiter.unicodeScalars.first, parsed.delimiter.unicodeScalars.count == 1 else {
+                        throw PostgresKitError.notSupported("COPY delimiter must be a single character")
+                    }
+                    guard parsed.nullString == nil || parsed.nullString == "\\N", !parsed.header else {
+                        throw PostgresKitError.notSupported("Text-format COPY supports only the default NULL string and no HEADER")
+                    }
+                    try await connection.copyFrom(schema: parsed.schema, table: table, columns: parsed.columns, delimiter: delimiter == "\t" ? nil : delimiter, logger: logger) { writer in
+                        for try await chunk in source where !chunk.isEmpty {
+                            try await writer.write(ByteBuffer(bytes: chunk))
+                        }
+                    }
+                case .csv:
+                    var converter = try CSVToCopyTextConverter(
+                        delimiter: parsed.delimiter,
+                        quote: parsed.quote,
+                        nullString: parsed.nullString ?? options.nullString,
+                        skipHeader: parsed.header
+                    )
+                    try await connection.copyFrom(schema: parsed.schema, table: table, columns: parsed.columns, logger: logger) { writer in
+                        var output: [UInt8] = []
+                        output.reserveCapacity(chunkSize)
+                        for try await chunk in source {
+                            converter.feed(chunk, into: &output)
+                            if output.count >= chunkSize {
+                                try await writer.write(ByteBuffer(bytes: output))
+                                output.removeAll(keepingCapacity: true)
+                            }
+                        }
+                        try converter.finish(into: &output)
+                        if !output.isEmpty { try await writer.write(ByteBuffer(bytes: output)) }
                     }
                 }
-                valuesSQL.append("(\(literals.joined(separator: ", ")))")
             }
-            let sql = insertPrefix + valuesSQL.joined(separator: ", ")
-            _ = try await client.executeDDL(sql)
-            rows.removeAll(keepingCapacity: true)
+        } catch let error as PostgresKitError {
+            throw error
+        } catch {
+            throw PostgresError.from(error)
         }
-
-        let parser = CSVParser(delimiter: parsed.delimiter, nullString: parsed.nullString ?? options.nullString, quote: parsed.quote)
-        for try await chunk in source {
-            accumulator.append(chunk)
-            while let lineRange = accumulator.firstLineRange() {
-                let lineData = accumulator[lineRange]
-                accumulator.removeSubrange(lineRange)
-                if parsed.header { parsed.header = false; continue }
-                if let line = String(data: lineData, encoding: .utf8)?
-                    .trimmingCharacters(in: .newlines), !line.isEmpty {
-                    rows.append(parser.parseLine(line))
-                    if rows.count >= batchSize { try await flushBatch() }
-                }
-            }
-        }
-        if !rows.isEmpty { try await flushBatch() }
-    }
-
-    private static func csvLine(_ fields: [String]) -> Data {
-        let line = fields.map { f in
-            if f.isEmpty { return "" }
-            let needsQuotes = f.contains(",") || f.contains("\n") || f.contains("\r") || f.contains("\"")
-            var s = f.replacingOccurrences(of: "\"", with: "\"\"")
-            if needsQuotes { s = "\"" + s + "\"" }
-            return s
-        }.joined(separator: ",") + "\n"
-        return Data(line.utf8)
-    }
-}
-
-private extension Data {
-    func firstLineRange() -> Range<Data.Index>? {
-        if let idx = self.firstIndex(of: 0x0A) { return startIndex..<index(after: idx) }
-        return nil
     }
 }

@@ -24,7 +24,7 @@ public extension PostgresSecurityClient {
         parts.append(client.quoteIdentifier(name))
 
         if let password {
-            parts.append(encrypted ? "WITH ENCRYPTED PASSWORD '\(password)'" : "WITH PASSWORD '\(password)'")
+            parts.append("WITH \(client.passwordClause(password, hash: encrypted))")
         }
 
         if superuser { parts.append("SUPERUSER") } else { parts.append("NOSUPERUSER") }
@@ -35,7 +35,7 @@ public extension PostgresSecurityClient {
         if replication { parts.append("REPLICATION") } else { parts.append("NOREPLICATION") }
         if bypassRLS { parts.append("BYPASSRLS") } else { parts.append("NOBYPASSRLS") }
 
-        if let validUntil { parts.append("VALID UNTIL '\(validUntil)'") }
+        if let validUntil { parts.append("VALID UNTIL \(client.quoteLiteral(validUntil))") }
 
         if !inRole.isEmpty {
             parts.append("IN ROLE \(inRole.map(client.quoteIdentifier).joined(separator: ", "))")
@@ -90,7 +90,7 @@ public extension PostgresSecurityClient {
 
         var options: [String] = []
         if let password {
-            options.append("ENCRYPTED PASSWORD '\(password)'")
+            options.append(client.passwordClause(password, hash: true))
         }
         if superuser { options.append("SUPERUSER") }
         if createDatabase { options.append("CREATEDB") }
@@ -100,7 +100,7 @@ public extension PostgresSecurityClient {
         if replication { options.append("REPLICATION") }
         if bypassRLS { options.append("BYPASSRLS") }
         if let connectionLimit { options.append("CONNECTION LIMIT \(connectionLimit)") }
-        if let validUntil { options.append("VALID UNTIL '\(validUntil)'") }
+        if let validUntil { options.append("VALID UNTIL \(client.quoteLiteral(validUntil))") }
 
         if !options.isEmpty {
             parts.append("WITH \(options.joined(separator: " "))")
@@ -133,7 +133,7 @@ public extension PostgresSecurityClient {
         } else {
             parts.append(client.quoteIdentifier(name))
             if let password {
-                parts.append(encrypted ? "WITH ENCRYPTED PASSWORD '\(password)'" : "WITH PASSWORD '\(password)'")
+                parts.append("WITH \(client.passwordClause(password, hash: encrypted))")
             }
             if let superuser { parts.append(superuser ? "SUPERUSER" : "NOSUPERUSER") }
             if let createDatabase { parts.append(createDatabase ? "CREATEDB" : "NOCREATEDB") }
@@ -143,7 +143,7 @@ public extension PostgresSecurityClient {
             if let replication { parts.append(replication ? "REPLICATION" : "NOREPLICATION") }
             if let bypassRLS { parts.append(bypassRLS ? "BYPASSRLS" : "NOBYPASSRLS") }
             if let connectionLimit { parts.append("CONNECTION LIMIT \(connectionLimit)") }
-            if let validUntil { parts.append("VALID UNTIL '\(validUntil)'") }
+            if let validUntil { parts.append("VALID UNTIL \(client.quoteLiteral(validUntil))") }
         }
 
         return try await client.executeDDL(parts.joined(separator: " "))

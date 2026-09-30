@@ -23,7 +23,7 @@ public extension PostgresReplicationClient {
 
         if let operations, !operations.isEmpty {
             let publishValue = operations.map { $0.lowercased() }.joined(separator: ", ")
-            parts.append("WITH (publish = '\(publishValue)')")
+            parts.append("WITH (publish = \(client.quoteLiteral(publishValue)))")
         }
 
         return try await client.executeDDL(parts.joined(separator: " "))
@@ -49,7 +49,7 @@ public extension PostgresReplicationClient {
     @discardableResult
     func alterPublicationSetOperations(name: String, operations: [String]) async throws -> Int {
         let publishValue = operations.map { $0.lowercased() }.joined(separator: ", ")
-        let sql = "ALTER PUBLICATION \(client.quoteIdentifier(name)) SET (publish = '\(publishValue)')"
+        let sql = "ALTER PUBLICATION \(client.quoteIdentifier(name)) SET (publish = \(client.quoteLiteral(publishValue)))"
         return try await client.executeDDL(sql)
     }
 
