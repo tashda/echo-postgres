@@ -156,6 +156,7 @@ extension PostgresClient {
     public var transactions: PostgresTransactionClient { .init(client: self) }
     public var executionPlan: PostgresExecutionPlanClient { .init(client: self) }
     public var bulk: PostgresBulkClient { .init(client: self) }
+    public var scripts: PostgresScriptClient { .init(client: self) }
     public var session: PostgresSessionClient { .init(client: self) }
     public var serverConfig: PostgresServerConfigClient { .init(client: self) }
     public var replication: PostgresReplicationClient { .init(client: self) }
