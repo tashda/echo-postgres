@@ -4,10 +4,13 @@ import PostgresWire
 public extension PostgresTypeClient {
     /// Create a new enum type.
     @discardableResult
-    func createEnum(name: String, values: [String], ifNotExists: Bool = false) async throws -> Int {
+    ///
+    /// PostgreSQL has no `CREATE TYPE IF NOT EXISTS`; with `ifNotExists` an existing type of the
+    /// same name is left alone and 0 is returned.
+    func createEnum(name: String, schema: String? = nil, values: [String], ifNotExists: Bool = false) async throws -> Int {
+        if ifNotExists, try await typeExists(name: name, schema: schema) { return 0 }
         var parts: [String] = ["CREATE TYPE"]
-        if ifNotExists { parts.append("IF NOT EXISTS") }
-        parts.append(client.quoteIdentifier(name))
+        parts.append(client.quoteQualified(name, schema: schema))
         parts.append("AS ENUM")
         let valueList = values.map(PostgresQuoting.quoteLiteral).joined(separator: ", ")
         parts.append("(\(valueList))")

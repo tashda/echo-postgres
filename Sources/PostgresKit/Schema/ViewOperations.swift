@@ -6,6 +6,7 @@ public extension PostgresViewClient {
     @discardableResult
     func createView(
         name: String,
+        schema: String? = nil,
         query: String,
         temporary: Bool = false,
         orReplace: Bool = false
@@ -14,7 +15,7 @@ public extension PostgresViewClient {
         if orReplace { parts.append("OR REPLACE") }
         if temporary { parts.append("TEMPORARY") }
         parts.append("VIEW")
-        parts.append(client.quoteIdentifier(name))
+        parts.append(client.quoteQualified(name, schema: schema))
         parts.append("AS \(query)")
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -33,12 +34,13 @@ public extension PostgresViewClient {
     @discardableResult
     func createMaterializedView(
         name: String,
+        schema: String? = nil,
         query: String,
         ifNotExists: Bool = false
     ) async throws -> Int {
         var parts: [String] = ["CREATE MATERIALIZED VIEW"]
         if ifNotExists { parts.append("IF NOT EXISTS") }
-        parts.append(client.quoteIdentifier(name))
+        parts.append(client.quoteQualified(name, schema: schema))
         parts.append("AS \(query)")
         return try await client.executeDDL(parts.joined(separator: " "))
     }

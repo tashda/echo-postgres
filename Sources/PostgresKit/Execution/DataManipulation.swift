@@ -4,28 +4,31 @@ import PostgresNIO
 
 /// High-level Data Manipulation Language (DML) operations.
 public extension PostgresBulkClient {
-    /// Insert rows into a table.
+    /// Insert rows into a table. Returns the number of rows inserted.
     @discardableResult
     func insert(
         into table: String,
+        schema: String? = nil,
         columns: [String] = [],
         values: [[Any]]
     ) async throws -> Int {
         let converted = try values.map { row in
             try row.map(PostgresInsertValue.fromAny)
         }
-        return try await insert(into: table, columns: columns, values: converted)
+        return try await insert(into: table, schema: schema, columns: columns, values: converted)
     }
 
     /// Insert rows using structured values that can mix binds and SQL expressions.
+    /// Returns the number of rows inserted.
     @discardableResult
     func insert(
         into table: String,
+        schema: String? = nil,
         columns: [String] = [],
         values: [[PostgresInsertValue]]
     ) async throws -> Int {
         try await client.withConnection { conn in
-            try await conn.insert(into: table, columns: columns, values: values)
+            try await conn.insert(into: table, schema: schema, columns: columns, values: values)
         }
     }
 
@@ -87,9 +90,11 @@ public extension PostgresBulkClient {
 
 public extension PostgresConnection {
     /// Insert rows using structured values that can mix binds and SQL expressions.
+    /// Returns the number of rows inserted.
     @discardableResult
     func insert(
         into table: String,
+        schema: String? = nil,
         columns: [String] = [],
         values: [[PostgresInsertValue]]
     ) async throws -> Int {
@@ -113,10 +118,12 @@ public extension PostgresConnection {
             return "(\(fragments.joined(separator: ", ")))"
         }.joined(separator: ", ")
 
-        let sql = "INSERT INTO \(quoteIdentifier(table))\(columnList) VALUES \(valuePlaceholders)"
+        let target = schema.map { "\(quoteIdentifier($0)).\(quoteIdentifier(table))" } ?? quoteIdentifier(table)
+        // A plain INSERT returns no rows; RETURNING one value per row gives the inserted count.
+        let sql = "INSERT INTO \(target)\(columnList) VALUES \(valuePlaceholders) RETURNING 1"
         let rows = try await query(sql, binds: allBinds)
         var count = 0
-        for try await _ in rows.decode((String?).self) {
+        for try await _ in rows.decode(Int32.self) {
             count += 1
         }
         return count

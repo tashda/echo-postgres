@@ -6,6 +6,7 @@ public extension PostgresAdminClient {
     @discardableResult
     func createTable(
         name: String,
+        schema: String? = nil,
         columns: [PostgresColumnDefinition],
         temporary: Bool = false,
         ifNotExists: Bool = false
@@ -14,7 +15,7 @@ public extension PostgresAdminClient {
         if temporary { parts.append("TEMPORARY") }
         parts.append("TABLE")
         if ifNotExists { parts.append("IF NOT EXISTS") }
-        parts.append(client.quoteIdentifier(name))
+        parts.append(client.quoteQualified(name, schema: schema))
 
         let columnDefinitions = columns.map { column in
             var columnDef = "\(client.quoteIdentifier(column.name)) \(column.dataType)"

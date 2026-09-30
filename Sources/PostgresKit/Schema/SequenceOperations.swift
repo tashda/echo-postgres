@@ -6,6 +6,7 @@ public extension PostgresSequenceClient {
     @discardableResult
     func createSequence(
         name: String,
+        schema: String? = nil,
         temporary: Bool = false,
         ifNotExists: Bool = false,
         startWith: Int? = nil,
@@ -19,7 +20,7 @@ public extension PostgresSequenceClient {
         if temporary { parts.append("TEMPORARY") }
         parts.append("SEQUENCE")
         if ifNotExists { parts.append("IF NOT EXISTS") }
-        parts.append(client.quoteIdentifier(name))
+        parts.append(client.quoteQualified(name, schema: schema))
 
         if let startWith { parts.append("START WITH \(startWith)") }
         if let incrementBy { parts.append("INCREMENT BY \(incrementBy)") }

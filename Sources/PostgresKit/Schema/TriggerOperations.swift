@@ -8,6 +8,7 @@ public extension PostgresTriggerClient {
     func createTrigger(
         name: String,
         table: String,
+        schema: String? = nil,
         event: PostgresTriggerEvent,
         operations: [PostgresTriggerOperation],
         procedure: String,
@@ -25,7 +26,7 @@ public extension PostgresTriggerClient {
 
         let operationList = operations.map { $0.rawValue }.joined(separator: " OR ")
         parts.append(operationList)
-        parts.append("ON \(client.quoteIdentifier(table))")
+        parts.append("ON \(client.quoteQualified(table, schema: schema))")
 
         if let when { parts.append("WHEN (\(when))") }
         parts.append("FOR EACH \(forEach.rawValue)")

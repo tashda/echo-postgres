@@ -7,6 +7,7 @@ public extension PostgresRoutineClient {
     @discardableResult
     func createFunction(
         name: String,
+        schema: String? = nil,
         parameters: [PostgresFunctionParameter],
         returnType: String,
         body: String,
@@ -24,7 +25,7 @@ public extension PostgresRoutineClient {
         var parts: [String] = ["CREATE"]
         if orReplace { parts.append("OR REPLACE") }
         parts.append("FUNCTION")
-        parts.append(client.quoteIdentifier(name))
+        parts.append(client.quoteQualified(name, schema: schema))
 
         let paramList = parameters.map { param in
             var paramDef = "\(client.quoteIdentifier(param.name)) \(param.dataType)"
