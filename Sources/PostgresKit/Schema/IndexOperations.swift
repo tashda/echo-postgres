@@ -7,6 +7,7 @@ public extension PostgresIndexClient {
     func createIndex(
         name: String,
         table: String,
+        schema: String? = nil,
         columns: [String],
         unique: Bool = false,
         ifNotExists: Bool = false
@@ -16,7 +17,7 @@ public extension PostgresIndexClient {
         parts.append("INDEX")
         if ifNotExists { parts.append("IF NOT EXISTS") }
         parts.append(client.quoteIdentifier(name))
-        parts.append("ON \(client.quoteIdentifier(table))")
+        parts.append("ON \(client.quoteQualified(table, schema: schema))")
 
         let columnList = columns.map { client.quoteIdentifier($0) }.joined(separator: ", ")
         parts.append("(\(columnList))")
@@ -43,10 +44,12 @@ public extension PostgresIndexClient {
     func createAdvancedIndex(
         name: String,
         table: String,
+        schema: String? = nil,
         columns: [PostgresIndexColumn],
         indexType: PostgresIndexType = .btree,
         unique: Bool = false,
         ifNotExists: Bool = false,
+        include: [String] = [],
         whereClause: String? = nil,
         tablespace: String? = nil,
         nullsDistinct: Bool = true
@@ -56,17 +59,19 @@ public extension PostgresIndexClient {
         parts.append("INDEX")
         if ifNotExists { parts.append("IF NOT EXISTS") }
         parts.append(client.quoteIdentifier(name))
-        parts.append("ON \(client.quoteIdentifier(table))")
+        parts.append("ON \(client.quoteQualified(table, schema: schema))")
 
         parts.append("USING \(indexType)")
 
         let columnList = columns.map { column in
-            var colDef = client.quoteIdentifier(column.name)
+            var colDef = column.isExpression ? "(\(column.name))" : client.quoteIdentifier(column.name)
+            if let operatorClass = column.operatorClass { colDef += " " + operatorClass }
             if let order = column.order { colDef += " " + order.rawValue }
             if let nullsOrder = column.nullsOrder { colDef += " NULLS " + nullsOrder.rawValue }
             return colDef
         }.joined(separator: ", ")
         parts.append("(\(columnList))")
+        if !include.isEmpty { parts.append("INCLUDE (\(include.map(client.quoteIdentifier).joined(separator: ", ")))") }
 
         if let whereClause { parts.append("WHERE \(whereClause)") }
         if let tablespace { parts.append("TABLESPACE \(client.quoteIdentifier(tablespace))") }

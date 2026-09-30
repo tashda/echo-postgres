@@ -64,6 +64,58 @@ struct SchemaQualifiedObjectsTests {
         #expect(objects.contains("paid"))
     }
 
+    @Test func indexesAndConstraintsInANamedSchema() async throws {
+        do {
+            try await createIndexesAndConstraints()
+        } catch {
+            Issue.record("\(String(reflecting: error))")
+        }
+    }
+
+    private func createIndexesAndConstraints() async throws {
+        let client = try await connect()
+        defer { client.close() }
+        let schema = "ix_" + UUID().uuidString.prefix(8).lowercased()
+        _ = try await client.admin.createSchema(name: schema)
+        defer { Task { _ = try? await client.admin.dropSchema(name: schema, ifExists: true, cascade: true) } }
+
+        _ = try await client.admin.createTable(name: "parents", schema: schema, columns: [
+            PostgresColumnDefinition(name: "id", dataType: "integer", nullable: false),
+        ])
+        _ = try await client.admin.createTable(name: "items", schema: schema, columns: [
+            PostgresColumnDefinition(name: "id", dataType: "integer", nullable: false),
+            PostgresColumnDefinition(name: "parent_id", dataType: "integer"),
+            PostgresColumnDefinition(name: "email", dataType: "text"),
+            PostgresColumnDefinition(name: "doc", dataType: "jsonb"),
+            PostgresColumnDefinition(name: "spot", dataType: "point"),
+            PostgresColumnDefinition(name: "price", dataType: "numeric"),
+        ])
+        _ = try await client.constraints.addPrimaryKey(table: "parents", schema: schema, column: "id")
+        _ = try await client.constraints.addPrimaryKey(table: "items", schema: schema, column: "id")
+        _ = try await client.constraints.addForeignKey(
+            table: "items", schema: schema, column: "parent_id", referencesTable: "parents", referencesColumn: "id", onDelete: .cascade
+        )
+        _ = try await client.constraints.addUniqueConstraint(table: "items", schema: schema, columns: ["email"])
+        _ = try await client.constraints.addCheckConstraint(table: "items", schema: schema, condition: "price >= 0", constraintName: "price_positive")
+
+        _ = try await client.indexes.createIndex(name: "items_parent", table: "items", schema: schema, columns: ["parent_id"])
+        _ = try await client.indexes.createAdvancedIndex(
+            name: "items_doc", table: "items", schema: schema,
+            columns: [PostgresIndexColumn(name: "doc", operatorClass: "jsonb_path_ops")], indexType: .gin
+        )
+        _ = try await client.indexes.createAdvancedIndex(
+            name: "items_email_lower", table: "items", schema: schema,
+            columns: [PostgresIndexColumn(expression: "lower(email)")], unique: true, include: ["price"], whereClause: "email IS NOT NULL"
+        )
+        _ = try await client.indexes.createAdvancedIndex(
+            name: "items_spot", table: "items", schema: schema, columns: [PostgresIndexColumn(name: "spot")], indexType: .spgist
+        )
+        let indexes = try await client.metadata.listIndexes(schema: schema, table: "items").map(\.name)
+        for name in ["items_parent", "items_doc", "items_email_lower", "items_spot"] {
+            #expect(indexes.contains(name), "\(name)")
+        }
+    }
+
     @Test func procedureSQL() {
         let sql = PostgresRoutineClient.procedureSQL(
             name: "\"s\".\"p\"", parameters: ["IN \"x\" integer"], body: "'SELECT 1'",

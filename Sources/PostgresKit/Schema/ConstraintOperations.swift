@@ -4,9 +4,9 @@ import PostgresWire
 public extension PostgresConstraintClient {
     /// Add a primary key constraint to a table.
     @discardableResult
-    func addPrimaryKey(table: String, column: String, constraintName: String? = nil) async throws -> Int {
+    func addPrimaryKey(table: String, schema: String? = nil, column: String, constraintName: String? = nil) async throws -> Int {
         let name = constraintName ?? "pk_\(table)_\(column)"
-        let sql = "ALTER TABLE \(client.quoteIdentifier(table)) ADD CONSTRAINT \(client.quoteIdentifier(name)) PRIMARY KEY (\(client.quoteIdentifier(column)))"
+        let sql = "ALTER TABLE \(client.quoteQualified(table, schema: schema)) ADD CONSTRAINT \(client.quoteIdentifier(name)) PRIMARY KEY (\(client.quoteIdentifier(column)))"
         return try await client.executeDDL(sql)
     }
 
@@ -14,8 +14,10 @@ public extension PostgresConstraintClient {
     @discardableResult
     func addForeignKey(
         table: String,
+        schema: String? = nil,
         column: String,
         referencesTable: String,
+        referencesSchema: String? = nil,
         referencesColumn: String,
         constraintName: String? = nil,
         onDelete: PostgresForeignKeyAction? = nil,
@@ -23,10 +25,10 @@ public extension PostgresConstraintClient {
     ) async throws -> Int {
         let name = constraintName ?? "fk_\(table)_\(column)_\(referencesTable)_\(referencesColumn)"
         var parts: [String] = [
-            "ALTER TABLE \(client.quoteIdentifier(table))",
+            "ALTER TABLE \(client.quoteQualified(table, schema: schema))",
             "ADD CONSTRAINT \(client.quoteIdentifier(name))",
             "FOREIGN KEY (\(client.quoteIdentifier(column)))",
-            "REFERENCES \(client.quoteIdentifier(referencesTable))(\(client.quoteIdentifier(referencesColumn)))"
+            "REFERENCES \(client.quoteQualified(referencesTable, schema: referencesSchema ?? schema))(\(client.quoteIdentifier(referencesColumn)))"
         ]
         if let onDelete { parts.append("ON DELETE \(onDelete.rawValue)") }
         if let onUpdate { parts.append("ON UPDATE \(onUpdate.rawValue)") }
@@ -35,17 +37,17 @@ public extension PostgresConstraintClient {
 
     /// Add a unique constraint to a table.
     @discardableResult
-    func addUniqueConstraint(table: String, columns: [String], constraintName: String? = nil) async throws -> Int {
+    func addUniqueConstraint(table: String, schema: String? = nil, columns: [String], constraintName: String? = nil) async throws -> Int {
         let name = constraintName ?? "uq_\(table)_\(columns.joined(separator: "_"))"
         let columnList = columns.map { client.quoteIdentifier($0) }.joined(separator: ", ")
-        let sql = "ALTER TABLE \(client.quoteIdentifier(table)) ADD CONSTRAINT \(client.quoteIdentifier(name)) UNIQUE (\(columnList))"
+        let sql = "ALTER TABLE \(client.quoteQualified(table, schema: schema)) ADD CONSTRAINT \(client.quoteIdentifier(name)) UNIQUE (\(columnList))"
         return try await client.executeDDL(sql)
     }
 
     /// Add a check constraint to a table.
     @discardableResult
-    func addCheckConstraint(table: String, condition: String, constraintName: String) async throws -> Int {
-        let sql = "ALTER TABLE \(client.quoteIdentifier(table)) ADD CONSTRAINT \(client.quoteIdentifier(constraintName)) CHECK (\(condition))"
+    func addCheckConstraint(table: String, schema: String? = nil, condition: String, constraintName: String) async throws -> Int {
+        let sql = "ALTER TABLE \(client.quoteQualified(table, schema: schema)) ADD CONSTRAINT \(client.quoteIdentifier(constraintName)) CHECK (\(condition))"
         return try await client.executeDDL(sql)
     }
 
