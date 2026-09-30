@@ -236,5 +236,16 @@ These stay in the session scratchpad and are not in either repo:
 
 **Test results:** the full suite (477 tests) passes against Docker Postgres 17, 14 and 18. Echo builds against the new driver unchanged.
 
-**Still open:** these are PostgresNIO limits or features that were never in scope. See `CLAUDE.md` → Areas for Improvement.
+### Follow-up (same day): former limits closed
+
+| Former limit | Now |
+|---|---|
+| Types without binary output (`aclitem`) fail the query | `PostgresSessionConnection` retries with only those columns cast to text (outside transactions; inside, the error carries a hint). |
+| COPY binary not supported | `copyOut` writes binary COPY from the binary cells; `copyIn` parses binary COPY and re-encodes it as text using the target column types. Round-trip tested over 11 types. |
+| No multi-host / `target_session_attrs` | `additionalHosts`, `targetSessionAttributes` (any, read-write, read-only, primary, standby, prefer-standby), `loadBalanceHosts`. |
+| No IAM / token auth | `passwordProvider` (called per connection; pools are replaced before the credential expires) and `PostgresAWSRDSAuthToken` (SigV4, checked against AWS's published example). |
+| `sslmode=allow` behaved like `prefer` | Plain first, TLS when `pg_hba.conf` rejects unencrypted connections. |
+| Oversized files | `PostgresActivityMonitor`, `AdvancedIntrospection` and three test files split under 500 lines. |
+
+**Still open: Kerberos / GSSAPI.** PostgresNIO's authentication state machine rejects GSS, and its types are internal. Supporting it needs a PostgresNIO fork plus a GSS.framework / libgssapi bridge, and a KDC to test against.
 

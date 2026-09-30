@@ -1,6 +1,32 @@
 # Echo: plan for adopting the postgres-wire fixes
 
-Echo is at `/Users/k/Development/Echo`. Other agents work there, so **nothing here has been applied**; this is the plan for whoever changes Echo. The background is in [INVESTIGATION_2026-09-30.md](INVESTIGATION_2026-09-30.md). The postgres-wire side is done on branch `fix/enterprise-hardening` (see §0).
+Echo is at `/Users/k/Development/Echo`. The background is in [INVESTIGATION_2026-09-30.md](INVESTIGATION_2026-09-30.md).
+
+## Status (2026-09-30)
+
+The driver is merged into postgres-wire `dev`. The Echo changes below are committed on Echo branch `claude/ecstatic-fermi-u1jxr6`, with `Package.resolved` pointing at the new postgres-wire `dev` revision.
+
+| Phase | State in Echo |
+|---|---|
+| 0 Driver on `dev` | ✅ `Package.resolved` updated |
+| 1 E1 rows 201–N | ✅ The fix was already on this branch. Regression test `PostgresResultPipelineTests` added. |
+| 2 E2 values after row 200 | ✅ Postgres spools decode with the driver (`PostgresSpoolColumns`); `DirectBinaryDecoder` and the OID map are removed |
+| 3 E3 pinned sessions | ✅ Query-tab sessions (`withPinnedQueries()`) run on one pinned connection per database (`PostgresPinnedSessionStore`); metadata stays on the pool; lost transactions are reported |
+| 4 E4 server-side cancel | ✅ `cancelQuery` cancels on the server first (`DatabaseSession.cancelRunningQuery`), then the task |
+| 5 E5 scripts | ✅ Postgres scripts with several statements use the existing multi-batch results (`PostgresSession.executeBatches`, one statement per batch, on one connection) |
+| 6 E6 error location | ✅ `normalizeError` understands the session's errors (message, detail, hint, SQLSTATE, and a caret under the position) |
+| 7 E7 database while waiting | ✅ The awaited dedicated session is switched to the tab's active database |
+| 8 Small items | ✅ Postgres arrays and `bit(n)` are no longer shown as numbers or booleans; `relacl`-style columns are read through the driver's text fallback |
+| Tests | ✅ `PostgresResultPipelineTests`, `PostgresSpoolDecodingTests`, and `PostgresQueryTabSessionTests` (end to end, runs when `ECHO_E2E_PG_PORT` is set) |
+
+Still to do in Echo (UI, so it needs an Echo Labs round first):
+- A transaction indicator for a tab (idle / in transaction / failed).
+- Asking Commit / Roll back / Cancel when a tab with an open transaction is closed or switches database. The data is available through `PostgresPinnedSessionStore.databasesWithOpenTransaction()`.
+
+Found along the way, outside Postgres:
+- **SQL Server spools** mix UTF-8 preview rows with raw TDS bytes after row 200 (the `canUseRawPath` route), but `decodeRowData` decodes every row as UTF-8. So integer, float, bit and uniqueidentifier columns after row 200 are probably garbled, the same bug as E2. The type-aware `ResultBinaryRowCodec.decode(_:columns:)` cannot be used as it stands, because it would also misread the string-encoded preview rows. Encode the preview rows as TDS bytes too, or record per chunk which encoding it uses.
+
+The phase descriptions below are kept for reference.
 
 ## Ground rules for every phase
 
