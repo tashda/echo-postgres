@@ -108,6 +108,26 @@ let rows = try await client.query(
 )
 ```
 
+## Integration Testing
+
+Locally, the integration tests run against a disposable PostgreSQL server from
+[echo-server-lab](https://github.com/tashda/echo-server-lab), which is removed when the run ends:
+
+```bash
+Tests/with-lab.sh swift test --filter 'PostgresKitTests|PostgresWireTests'
+```
+
+The suite loads `Tests/PostgresKitTests/Support/SampleData.sql` into the server itself
+(`PostgresLabFixture`). The TLS, Kerberos and failover tests need their own servers on Docker; this
+starts them and removes them afterwards:
+
+```bash
+Tests/Fixtures/with-fixtures.sh tls kerberos failover -- \
+  swift test --filter 'TLSIntegrationTests|KerberosIntegrationTests|FailoverIntegrationTests'
+```
+
+The Docker setup below is what CI uses.
+
 ## Integration Testing with Docker
 
 This project includes a lightweight, built-in utility to run integration tests against a live PostgreSQL database managed by Docker.

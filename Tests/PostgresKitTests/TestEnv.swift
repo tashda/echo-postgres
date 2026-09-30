@@ -4,10 +4,11 @@ import PostgresKit
 
 enum TestEnv {
     private static let logger = Logger(label: "postgres.wire.tests")
-    /// Loads `.env` from the working directory. When `USE_DOCKER=1`, `POSTGRES_*` entries are ignored so
-    /// a `.env` that points at a real server can never redirect tests away from the Docker fixture.
+    /// Loads `.env` from the working directory. With a lab server (`SERVERLAB_CONTAINER`) or
+    /// `USE_DOCKER=1`, `POSTGRES_*` entries are ignored so a `.env` that points at a real server can
+    /// never redirect tests away from the disposable one.
     static func loadDotEnv() {
-        let dockerManaged = getEnv("USE_DOCKER") == "1"
+        let dockerManaged = getEnv("USE_DOCKER") == "1" || getEnv("SERVERLAB_CONTAINER") != nil
         let fm = FileManager.default
         let cwd = fm.currentDirectoryPath
         let envPath = (cwd as NSString).appendingPathComponent(".env")
