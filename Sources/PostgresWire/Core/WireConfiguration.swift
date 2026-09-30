@@ -62,6 +62,9 @@ public struct PostgresWireConfiguration: Sendable {
     public var sslKeyPath: String?
     /// The password protecting ``sslKeyPath`` (libpq `sslpassword`), if the key is encrypted.
     public var sslKeyPassword: String?
+    /// Kerberos service name (libpq `krbsrvname`): when the server asks for Kerberos (GSSAPI or
+    /// SSPI), the user's ticket is used for `<service>@<host>`. `nil` refuses Kerberos.
+    public var kerberosServiceName: String? = "postgres"
     /// Reported to the server as `application_name` (visible in `pg_stat_activity`).
     public var applicationName: String?
     /// TCP connect timeout in seconds. Defaults to 10.
@@ -213,6 +216,9 @@ public struct PostgresWireConfiguration: Sendable {
         }
         configuration.options.connectTimeout = .seconds(Int64(connectTimeout))
         configuration.options.additionalStartupParameters = startupParameters
+        if unixSocketPath == nil, let kerberosServiceName {
+            configuration.options.gssAuthenticatorFactory = PostgresKerberos.authenticatorFactory(serviceName: kerberosServiceName, host: host)
+        }
         return configuration
     }
 
@@ -244,6 +250,9 @@ public struct PostgresWireConfiguration: Sendable {
         }
         configuration.options.connectTimeout = .seconds(Int64(connectTimeout))
         configuration.options.additionalStartupParameters = startupParameters
+        if unixSocketPath == nil, let kerberosServiceName {
+            configuration.options.gssAuthenticatorFactory = PostgresKerberos.authenticatorFactory(serviceName: kerberosServiceName, host: host)
+        }
         configuration.options.minimumConnections = max(0, pool.minimumConnections)
         configuration.options.maximumConnections = max(1, max(pool.minimumConnections, pool.maximumConnections))
         configuration.options.connectionIdleTimeout = pool.idleTimeout

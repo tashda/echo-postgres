@@ -11,4 +11,20 @@ upstream (or the changes offered upstream) later.
 
 ## Changes
 
-- None yet.
+Kerberos sign-in (GSSAPI, and SSPI from Windows servers). PostgresNIO refused both; the copy
+relays the tokens to an authenticator that postgres-wire supplies (`PostgresKerberos` in
+PostgresWire: Apple's GSS framework on macOS, MIT Kerberos on Linux).
+
+- `Connection/PostgresGSSAuthenticator.swift` (new): the `PostgresGSSAuthenticator` protocol and
+  `PostgresGSSAuthenticatorFactory`.
+- `Connection/PostgresConnection+Configuration.swift` and `Pool/PostgresClient.swift`: the options
+  gain `gssAuthenticatorFactory` (default `nil`, which refuses Kerberos as before);
+  `Pool/ConnectionFactory.swift` passes it from the pool to each connection.
+- `New/Connection State Machine/ConnectionStateMachine.swift`: `AuthContext` carries the factory
+  (not part of equality); the new `sendGSSResponse` action is sent as the existing 'p' message.
+- `New/PostgresChannelHandler.swift`: builds `AuthContext` with the factory.
+- `New/Connection State Machine/AuthenticationStateMachine.swift`: on `gss`/`sspi` the state
+  machine asks the authenticator for the first token (state `gssTokenSent`), answers each
+  `gssContinue` with the next token, and finishes on `ok`. Without a factory it refuses as before.
+- `New/PSQLError+Kerberos.swift` (new): `PSQLError.serverRequestedKerberos`, so the message can say
+  that the server asks for Kerberos.

@@ -110,6 +110,9 @@ public final class PostgresClient: Sendable, ServiceLifecycle.Service {
             /// startup message that the client sends to the server.
             public var additionalStartupParameters: [(String, String)] = []
 
+            /// postgres-wire: answers a server that asks for Kerberos (GSSAPI or SSPI).
+            public var gssAuthenticatorFactory: PostgresGSSAuthenticatorFactory? = nil
+
             /// The minimum number of connections that the client shall keep open at any time, even if there is no
             /// demand. Default to `0`.
             ///

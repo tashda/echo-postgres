@@ -90,6 +90,10 @@ extension PostgresConnection {
             /// startup message that the client sends to the server.
             public var additionalStartupParameters: [(String, String)]
 
+            /// postgres-wire: answers a server that asks for Kerberos (GSSAPI or SSPI). `nil`
+            /// (the default) refuses Kerberos, as PostgresNIO does.
+            public var gssAuthenticatorFactory: PostgresGSSAuthenticatorFactory?
+
             /// Create an options structure with default values.
             ///
             /// Most users should not need to adjust the defaults.
@@ -98,6 +102,7 @@ extension PostgresConnection {
                 self.tlsServerName = nil
                 self.requireBackendKeyData = true
                 self.additionalStartupParameters = []
+                self.gssAuthenticatorFactory = nil
             }
         }
         

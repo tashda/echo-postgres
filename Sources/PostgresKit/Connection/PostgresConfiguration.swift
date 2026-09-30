@@ -36,6 +36,8 @@ public struct PostgresConfiguration: Sendable {
     public var sslKeyPath: String?
     /// The password protecting ``sslKeyPath`` (libpq `sslpassword`), if the key is encrypted.
     public var sslKeyPassword: String?
+    /// Kerberos service name (libpq `krbsrvname`); `nil` refuses Kerberos. See ``PostgresKerberos``.
+    public var kerberosServiceName: String? = "postgres"
     /// Reported to the server as `application_name` (visible in `pg_stat_activity`).
     public var applicationName: String?
     public var pool: PostgresPoolConfiguration
@@ -167,6 +169,7 @@ extension PostgresConfiguration {
             passwordProvider: passwordProvider
         )
         configuration.sslKeyPassword = sslKeyPassword
+        configuration.kerberosServiceName = kerberosServiceName
         return configuration
     }
 }

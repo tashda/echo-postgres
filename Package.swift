@@ -60,10 +60,17 @@ let package = Package(
             ],
             swiftSettings: vendoredSwiftSettings
         ),
+        // MIT Kerberos for Kerberos sign-in on Linux; macOS uses the GSS framework.
+        .systemLibrary(
+            name: "CGSSAPI",
+            pkgConfig: "krb5-gssapi",
+            providers: [.apt(["libkrb5-dev"]), .yum(["krb5-devel"])]
+        ),
         .target(
             name: "PostgresWire",
             dependencies: [
                 "PostgresNIO",
+                .target(name: "CGSSAPI", condition: .when(platforms: [.linux])),
                 .product(name: "Logging", package: "swift-log")
             ]
         ),

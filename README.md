@@ -15,12 +15,17 @@ A high-performance, SwiftNIO-based PostgreSQL client library for Swift, providin
 - **Execution Options**: Fine-grained control over query execution, including server-side cursor thresholds and fetch baselines.
 - **Metadata Utilities**: Helpers to list databases, schemas, tables, and object definitions natively in Swift.
 - **Independent**: Clean API surface completely independent of any specific web framework.
+- **Sign-in**: passwords (SCRAM-SHA-256, MD5), TLS in every libpq `sslmode` with client certificates
+  (and encrypted keys, `sslKeyPassword`), AWS RDS IAM tokens, and **Kerberos** (GSSAPI, and SSPI from
+  Windows servers) with the user's existing ticket (`kerberosServiceName`, `postgres` by default).
 
 ## Prerequisites
 
 - **Swift 6.0+**
 - **PostgreSQL 14, 15, 16, 17, 18** (Required for integration testing)
 - **Docker** (Optional, for automated testing)
+- **Linux only:** MIT Kerberos headers (`apt install libkrb5-dev`, `dnf install krb5-devel`) for
+  Kerberos sign-in. macOS uses the built-in GSS framework.
 
 ## Installation
 
@@ -127,6 +132,21 @@ When `USE_DOCKER=1` is set:
 3.  Overrides connection details to point to the temporary Docker container.
 4.  Stops and removes the container after the tests complete.
 
+### TLS and Kerberos servers
+
+Two more fixtures start servers the default one can't cover; their tests are skipped without them:
+
+```bash
+eval "$(Tests/Fixtures/tls/start-server.sh)"        # TLS only: private CA, server and client certificates
+swift test --filter TLSIntegrationTests
+
+eval "$(Tests/Fixtures/kerberos/start-server.sh)"   # Kerberos only, with its own KDC (realm EXAMPLE.TEST)
+swift test --filter KerberosIntegrationTests
+```
+
+The Kerberos fixture keeps its own `krb5.conf` and ticket cache in `Tests/Fixtures/kerberos/state`;
+your own Kerberos setup and tickets are not used or changed.
+
 ## Documentation
 
 Comprehensive documentation can be generated using Swift-DocC:
@@ -138,3 +158,7 @@ swift package generate-documentation
 ## License
 
 This project is licensed under the Apache 2.0 License. See the [LICENSE.txt](LICENSE.txt) file for details.
+
+It includes a copy of [PostgresNIO](https://github.com/vapor/postgres-nio) (MIT License) in
+`Sources/PostgresNIO` and `Sources/_ConnectionPoolModule`; its licence, notice and the list of changes
+are in [ThirdParty/postgres-nio](ThirdParty/postgres-nio).

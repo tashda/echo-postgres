@@ -14,7 +14,11 @@ internal enum PostgresErrorParsing {
         case .sslUnsupported: return "The server does not support SSL/TLS connections."
         case .receivedUnencryptedDataAfterSSLRequest: return "Received unencrypted data after requesting an SSL connection."
         case .authMechanismRequiresPassword: return "The server requires a password but none was provided."
-        case .unsupportedAuthMechanism: return "The server requested an authentication mechanism that is not supported."
+        case .unsupportedAuthMechanism:
+            if error.serverRequestedKerberos {
+                return "The server asks for Kerberos sign-in, which is turned off for this connection (set a Kerberos service name, normally postgres)."
+            }
+            return "The server requested an authentication mechanism that is not supported."
         case .saslError:
             if let underlying { return "Authentication failed: \(underlyingDescription(underlying))" }
             return "SASL authentication failed."

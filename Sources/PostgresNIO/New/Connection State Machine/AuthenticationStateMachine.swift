@@ -10,7 +10,10 @@ struct AuthenticationStateMachine {
         case saslInitialResponseSent(SASLAuthenticationManager<SASLMechanism.SCRAM.SHA256>)
         case saslChallengeResponseSent(SASLAuthenticationManager<SASLMechanism.SCRAM.SHA256>)
         case saslFinalReceived
-        
+
+        /// postgres-wire: a Kerberos (GSSAPI/SSPI) token was sent.
+        case gssTokenSent(any PostgresGSSAuthenticator)
+
         case error(PSQLError)
         case authenticated
     }
@@ -20,6 +23,8 @@ struct AuthenticationStateMachine {
         case sendPassword(PasswordAuthencationMode, AuthContext)
         case sendSaslInitialResponse(name: String, initialResponse: [UInt8])
         case sendSaslResponse([UInt8])
+        /// postgres-wire: a GSSResponse message (the same 'p' message as a SASL response).
+        case sendGSSResponse([UInt8])
         case wait
         case authenticated
         
@@ -62,10 +67,20 @@ struct AuthenticationStateMachine {
                 return self.setAndFireError(.unsupportedAuthMechanism(.kerberosV5))
             case .scmCredential:
                 return self.setAndFireError(.unsupportedAuthMechanism(.scmCredential))
-            case .gss:
-                return self.setAndFireError(.unsupportedAuthMechanism(.gss))
-            case .sspi:
-                return self.setAndFireError(.unsupportedAuthMechanism(.sspi))
+            case .gss, .sspi:
+                // postgres-wire: Kerberos through the configured authenticator.
+                guard let factory = self.authContext.gssAuthenticatorFactory else {
+                    if case .gss = message { return self.setAndFireError(.unsupportedAuthMechanism(.gss)) }
+                    return self.setAndFireError(.unsupportedAuthMechanism(.sspi))
+                }
+                do {
+                    let authenticator = try factory()
+                    let token = try authenticator.initialToken()
+                    self.state = .gssTokenSent(authenticator)
+                    return .sendGSSResponse(token)
+                } catch {
+                    return self.setAndFireError(.sasl(underlying: error))
+                }
             case .sasl(let mechanisms):
                 guard mechanisms.contains(SASLMechanism.SCRAM.SHA256.name) else {
                     return self.setAndFireError(.unsupportedAuthMechanism(.sasl(mechanisms: mechanisms)))
@@ -98,6 +113,23 @@ struct AuthenticationStateMachine {
                  .saslFinal:
                 return self.setAndFireError(.unexpectedBackendMessage(.authentication(message)))
             }
+        case .gssTokenSent(let authenticator):
+            switch message {
+            case .ok:
+                self.state = .authenticated
+                return .authenticated
+            case .gssContinue(data: var data):
+                let input = data.readBytes(length: data.readableBytes) ?? []
+                do {
+                    guard let token = try authenticator.nextToken(for: input), !token.isEmpty else { return .wait }
+                    return .sendGSSResponse(token)
+                } catch {
+                    return self.setAndFireError(.sasl(underlying: error))
+                }
+            default:
+                return self.setAndFireError(.unexpectedBackendMessage(.authentication(message)))
+            }
+
         case .passwordAuthenticationSent, .saslFinalReceived:
             guard case .ok = message else {
                 return self.setAndFireError(.unexpectedBackendMessage(.authentication(message)))
@@ -174,7 +206,8 @@ struct AuthenticationStateMachine {
              .passwordAuthenticationSent,
              .saslInitialResponseSent,
              .saslChallengeResponseSent,
-             .saslFinalReceived:
+             .saslFinalReceived,
+             .gssTokenSent:
             self.state = .error(error)
             return .reportAuthenticationError(error)
         case .authenticated, .error:
@@ -194,7 +227,8 @@ struct AuthenticationStateMachine {
              .passwordAuthenticationSent,
              .saslInitialResponseSent,
              .saslChallengeResponseSent,
-             .saslFinalReceived:
+             .saslFinalReceived,
+             .gssTokenSent:
             return false
         }
     }
@@ -216,6 +250,8 @@ extension AuthenticationStateMachine.State: CustomDebugStringConvertible {
             return ".saslChallengeResponseSent(\(String(reflecting: saslManager)))"
         case .saslFinalReceived:
             return ".saslFinalReceived"
+        case .gssTokenSent:
+            return ".gssTokenSent"
         
         case .error(let error):
             return ".error(\(String(reflecting: error)))"

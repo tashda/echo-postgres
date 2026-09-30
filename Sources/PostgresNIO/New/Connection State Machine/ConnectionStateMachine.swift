@@ -1210,6 +1210,9 @@ extension ConnectionStateMachine {
             return .sendSaslInitialResponse(name: name, initialResponse: initialResponse)
         case .sendSaslResponse(let bytes):
             return .sendSaslResponse(bytes)
+        case .sendGSSResponse(let bytes):
+            // postgres-wire: GSSResponse is the same 'p' message as a SASL response.
+            return .sendSaslResponse(bytes)
         case .authenticated:
             self.state = .authenticated(nil, [:])
             return .wait
@@ -1250,12 +1253,16 @@ struct AuthContext: CustomDebugStringConvertible {
     var password: String?
     var database: String?
     var additionalParameters: [(String, String)]
+    /// postgres-wire: answers a Kerberos (GSSAPI/SSPI) request; not part of equality.
+    var gssAuthenticatorFactory: PostgresGSSAuthenticatorFactory?
 
-    init(username: String, password: String? = nil, database: String? = nil, additionalParameters: [(String, String)] = []) {
+    init(username: String, password: String? = nil, database: String? = nil, additionalParameters: [(String, String)] = [],
+         gssAuthenticatorFactory: PostgresGSSAuthenticatorFactory? = nil) {
         self.username = username
         self.password = password
         self.database = database
         self.additionalParameters = additionalParameters
+        self.gssAuthenticatorFactory = gssAuthenticatorFactory
     }
 
     var debugDescription: String {

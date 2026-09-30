@@ -172,7 +172,8 @@ final class PostgresBinaryFormatterTests: XCTestCase {
         let lowerInclusive: UInt8 = 0x02
         XCTAssertEqual(format(3904, [lowerInclusive] + be(Int32(4)) + be(Int32(1)) + be(Int32(4)) + be(Int32(10))), "[1,10)")
         XCTAssertEqual(format(3904, [0x01]), "empty")
-        XCTAssertEqual(format(3904, [0x08 | 0x04] + be(Int32(4)) + be(Int32(5))), "(,5]")
+        let upperOnly: [UInt8] = [UInt8(0x08 | 0x04)] + be(Int32(4)) + be(Int32(5))
+        XCTAssertEqual(format(3904, upperOnly), "(,5]")
         XCTAssertEqual(format(3908, [lowerInclusive] + be(Int32(8)) + be(Int64(0)) + be(Int32(8)) + be(Int64(86_400_000_000))),
                        #"["2000-01-01 00:00:00","2000-01-02 00:00:00")"#)
         let range = [lowerInclusive] + be(Int32(4)) + be(Int32(1)) + be(Int32(4)) + be(Int32(3))
@@ -191,18 +192,22 @@ final class PostgresBinaryFormatterTests: XCTestCase {
 
     func testTextSearch() {
         // 'hello':1 'world':2A
-        let vector = be(Int32(2)) + Array("hello".utf8) + [0] + be(UInt16(1)) + be(UInt16(1))
-            + Array("world".utf8) + [0] + be(UInt16(1)) + be(UInt16(0xC002))
+        // Built in steps: one long expression can exceed the type checker's time limit on Linux.
+        var vector: [UInt8] = be(Int32(2))
+        vector += Array("hello".utf8) + [0]
+        vector += be(UInt16(1)) + be(UInt16(1))
+        vector += Array("world".utf8) + [0]
+        vector += be(UInt16(1)) + be(UInt16(0xC002))
         XCTAssertEqual(format(3614, vector), "'hello':1 'world':2A")
         // 'fat' & ( 'rat' | 'cat' ): prefix order op(&), right subtree first, then left.
-        let query = be(Int32(5))
-            + [2, 2]                                            // &
-            + [2, 3]                                            // |  (right operand of &)
-            + [1, 0, 0] + Array("cat".utf8) + [0]               // right of |
-            + [1, 0, 0] + Array("rat".utf8) + [0]               // left of |
-            + [1, 0, 0] + Array("fat".utf8) + [0]               // left of &
+        var query: [UInt8] = be(Int32(5))
+        query += [2, 2]                                         // &
+        query += [2, 3]                                         // |  (right operand of &)
+        query += [1, 0, 0] + Array("cat".utf8) + [0]            // right of |
+        query += [1, 0, 0] + Array("rat".utf8) + [0]            // left of |
+        query += [1, 0, 0] + Array("fat".utf8) + [0]            // left of &
         XCTAssertEqual(format(3615, query), "'fat' & ( 'rat' | 'cat' )")
-        let prefix = be(Int32(1)) + [1, 8, 1] + Array("sup".utf8) + [0]
+        let prefix: [UInt8] = be(Int32(1)) + [1, 8, 1] + Array("sup".utf8) + [0]
         XCTAssertEqual(format(3615, prefix), "'sup':*A")
     }
 

@@ -488,7 +488,8 @@ final class PostgresChannelHandler: ChannelDuplexHandler {
                     username: username,
                     password: self.configuration.password,
                     database: self.configuration.database,
-                    additionalParameters: self.configuration.options.additionalStartupParameters
+                    additionalParameters: self.configuration.options.additionalStartupParameters,
+                    gssAuthenticatorFactory: self.configuration.options.gssAuthenticatorFactory
                 )
                 let action = self.state.provideAuthenticationContext(authContext)
                 return self.run(action, with: context)
