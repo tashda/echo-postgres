@@ -1,5 +1,9 @@
 # Echo, SQL Server: values after row 200 are shown as raw bytes
 
+> **Fixed** in Echo `ce98d8e4` (sqlserver-nio agent): every SQL Server row, the preview included, is
+> spooled as wire bytes and formatted by `SQLServerCellFormatter`; `TDSBinaryDecoder` is gone
+> (fix option 1 below). Kept as the record of the finding.
+
 Found 2026-09-30 while fixing the same bug on the PostgreSQL path. **Reproduced** with Echo's real
 result pipeline (test: [echo-regression-tests/MSSQLSpoolReproTests.swift](echo-regression-tests/MSSQLSpoolReproTests.swift)).
 
