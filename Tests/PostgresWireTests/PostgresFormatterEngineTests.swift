@@ -28,11 +28,11 @@ final class PostgresFormatterEngineTests: XCTestCase {
         XCTAssertEqual(result, ["NULL"])
     }
 
-    func testEmptyBytes_ReturnsNullDisplay() async {
+    func testEmptyText_IsEmptyStringNotNull() async {
         let engine = makeEngine()
         let payload = singleCellRow(cell(oid: 25, bytes: Data()))
         let result = await engine.formatRow(payload)
-        XCTAssertEqual(result, ["NULL"])
+        XCTAssertEqual(result, [""])
     }
 
     func testCustomNullDisplay() async {
@@ -42,11 +42,11 @@ final class PostgresFormatterEngineTests: XCTestCase {
         XCTAssertEqual(result, ["<NULL>"])
     }
 
-    func testCustomNullDisplay_EmptyBytes() async {
+    func testCustomNullDisplay_OnlyForNull() async {
         let engine = makeEngine { $0.nullValueDisplay = "—" }
-        let payload = singleCellRow(cell(oid: 23, bytes: Data()))
+        let payload = singleCellRow(cell(oid: 25, bytes: Data()))
         let result = await engine.formatRow(payload)
-        XCTAssertEqual(result, ["—"])
+        XCTAssertEqual(result, [""])
     }
 
     // MARK: - Boolean formatting (OID 16)
@@ -129,39 +129,36 @@ final class PostgresFormatterEngineTests: XCTestCase {
     func testSmallInt_TwoBytes_ProducesNumericString() async {
         let engine = makeEngine()
         let value: Int16 = 100
-        let data = withUnsafeBytes(of: value) { Data($0) }
+        let data = withUnsafeBytes(of: value.bigEndian) { Data($0) }
         let payload = singleCellRow(cell(oid: 21, bytes: data))
         let result = await engine.formatRow(payload)
-        XCTAssertNotNil(result[0])
-        XCTAssertNotNil(Int16(result[0]!))
+        XCTAssertEqual(result[0], "100")
     }
 
     func testInteger_FourBytes_ProducesNumericString() async {
         let engine = makeEngine()
         let value: Int32 = 42
-        let data = withUnsafeBytes(of: value) { Data($0) }
+        let data = withUnsafeBytes(of: value.bigEndian) { Data($0) }
         let payload = singleCellRow(cell(oid: 23, bytes: data))
         let result = await engine.formatRow(payload)
-        XCTAssertNotNil(result[0])
-        XCTAssertNotNil(Int32(result[0]!))
+        XCTAssertEqual(result[0], "42")
     }
 
     func testBigInt_EightBytes_ProducesNumericString() async {
         let engine = makeEngine()
         let value: Int64 = 1_000_000
-        let data = withUnsafeBytes(of: value) { Data($0) }
+        let data = withUnsafeBytes(of: value.bigEndian) { Data($0) }
         let payload = singleCellRow(cell(oid: 20, bytes: data))
         let result = await engine.formatRow(payload)
-        XCTAssertNotNil(result[0])
-        XCTAssertNotNil(Int64(result[0]!))
+        XCTAssertEqual(result[0], "1000000")
     }
 
-    func testInteger_WrongSize_ReturnsNullDisplay() async {
+    func testInteger_WrongSize_ShowsHex() async {
         let engine = makeEngine()
-        // 3 bytes doesn't match 2/4/8
+        // 3 bytes doesn't match int4: shown as raw hex rather than a wrong number or NULL
         let payload = singleCellRow(cell(oid: 23, bytes: Data([1, 2, 3])))
         let result = await engine.formatRow(payload)
-        XCTAssertEqual(result, ["NULL"])
+        XCTAssertEqual(result, ["\\x010203"])
     }
 
     // MARK: - UUID formatting (OID 2950)
@@ -172,8 +169,7 @@ final class PostgresFormatterEngineTests: XCTestCase {
         let data = withUnsafeBytes(of: uuid.uuid) { Data($0) }
         let payload = singleCellRow(cell(oid: 2950, bytes: data))
         let result = await engine.formatRow(payload)
-        XCTAssertNotNil(result[0])
-        XCTAssertNotNil(UUID(uuidString: result[0]!))
+        XCTAssertEqual(result[0], "550e8400-e29b-41d4-a716-446655440000")
     }
 
     func testUUID_WrongSize_FallsBackToBase64() async {
@@ -226,7 +222,7 @@ final class PostgresFormatterEngineTests: XCTestCase {
     func testJSONB_ValidJSON_ProducesString() async {
         let engine = makeEngine()
         let json = #"{"number":42}"#
-        let data = json.data(using: .utf8)!
+        let data = Data([1]) + json.data(using: .utf8)! // jsonb binary format starts with version 1
         let payload = singleCellRow(cell(oid: 3802, bytes: data))
         let result = await engine.formatRow(payload)
         XCTAssertNotNil(result[0])

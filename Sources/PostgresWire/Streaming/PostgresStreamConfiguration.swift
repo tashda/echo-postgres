@@ -19,8 +19,11 @@ public struct PostgresStreamConfiguration: @unchecked Sendable {
     /// Enable live row count updates during streaming
     public var liveCounterEnabled: Bool = true
 
-    /// Update frequency for live counter (every N rows)
-    public var liveCounterFrequency: Int = 5
+    /// Send a progress update at least every N rows (values below 1 are treated as 1).
+    ///
+    /// Every update copies the new rows out of the ``PostgresDataStream`` actor, so small values make
+    /// streaming noticeably slower. Updates are also sent every ``progressThrottle`` seconds.
+    public var liveCounterFrequency: Int = 1_000
 
     // MARK: - Formatting Configuration
 
@@ -54,12 +57,14 @@ public struct PostgresStreamConfiguration: @unchecked Sendable {
     // MARK: - Performance Tuning
 
     /// Throttle interval for progress updates to prevent UI flooding
-    public var progressThrottle: TimeInterval = 0.05 // 50ms
+    public var progressThrottle: TimeInterval = 0.1 // 100ms
 
-    /// Enable incremental loading for large result sets
+    /// Enable incremental loading for large result sets.
+    /// Advisory: the driver does not read this; it is carried for UI consumers.
     public var enableIncrementalLoading: Bool = true
 
-    /// Size of incremental window for virtual scrolling
+    /// Size of incremental window for virtual scrolling.
+    /// Advisory: the driver does not read this; it is carried for UI consumers.
     public var incrementalWindowSize: Int = 200
 
     // MARK: - Initialization
@@ -81,7 +86,7 @@ public struct PostgresStreamConfiguration: @unchecked Sendable {
     public static let largeDataset = PostgresStreamConfiguration {
         $0.initialPreviewRows = 200
         $0.streamingFetchSize = 8192
-        $0.liveCounterFrequency = 50
+        $0.liveCounterFrequency = 5_000
         $0.maxConcurrentRows = 50_000
         $0.enableIncrementalLoading = true
         $0.incrementalWindowSize = 100

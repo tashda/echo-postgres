@@ -27,6 +27,12 @@ public struct PostgresRowExtractor: Sendable {
         return result
     }
 
+    /// The type OID stored in a ``ColumnInfo/dataType`` produced by ``columns(from:)`` (`"INTEGER(23)"` → 23).
+    public nonisolated static func oid(fromDataType dataType: String) -> UInt32? {
+        guard let open = dataType.lastIndex(of: "("), let close = dataType.lastIndex(of: ")"), open < close else { return nil }
+        return UInt32(dataType[dataType.index(after: open)..<close])
+    }
+
     // MARK: - Reusable Encoding Context
 
     /// Pre-allocated encoding buffer that can be reused across rows to avoid per-row malloc.
@@ -112,7 +118,7 @@ public struct PostgresRowExtractor: Sendable {
             return (encoded, nil)
         }
 
-        // Allocating path (preview rows only — typically ≤200 rows)
+        // Allocating path (preview rows only)
         var capacity = columnCount * 40
         var rawBuffer = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: 8)
         var offset = 0

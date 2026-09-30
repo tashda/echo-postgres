@@ -4,6 +4,9 @@ import PostgresNIO
 
 /// Actor managing PostgreSQL data streaming with integrated formatting.
 /// Prefer `PostgresRowExtractor` and `PostgresCellFormatter` for lower per-row overhead in new code.
+///
+/// Row indexes are absolute (0 = first row of the result). When more than `maxConcurrentRows` rows
+/// have been received, the oldest rows are dropped from memory and are no longer returned.
 public actor PostgresDataStream {
 
     // MARK: - Configuration
@@ -17,11 +20,19 @@ public actor PostgresDataStream {
     /// Column information for the result set
     public private(set) var columns: [ColumnInfo] = []
 
-    /// Raw row payloads for deferred formatting
+    /// Raw row payloads still held in memory, starting at absolute row ``firstRetainedRowIndex``.
     private(set) public var rawRows: [ResultRowPayload] = []
 
-    /// Formatted rows for immediate display
-    private(set) public var formattedRows: [[String?]] = []
+    /// Formatted rows held in memory (same indexing as ``rawRows``); rows not formatted yet are all `nil`.
+    public var formattedRows: [[String?]] {
+        formattedStorage.map { $0 ?? Array(repeating: nil, count: columns.count) }
+    }
+
+    /// `nil` marks a row that has not been formatted yet (SQL NULLs are `nil` *inside* a row).
+    private var formattedStorage: [[String?]?] = []
+
+    /// Absolute index of `rawRows[0]`.
+    public private(set) var firstRetainedRowIndex = 0
 
     /// Total number of rows processed
     private(set) public var totalRowCount: Int = 0
@@ -34,18 +45,11 @@ public actor PostgresDataStream {
     /// Command tag from PostgreSQL when query completes
     private(set) public var commandTag: String?
 
-    /// Progress tracking
-    private var lastProgressUpdate: TimeInterval = 0
-    private var lastProgressRowCount: Int = 0
-
     // MARK: - Formatting Engine
 
     private let formatterEngine: PostgresFormatterEngine
 
-    // MARK: - Memory Management
-
-    /// Maximum rows to keep in memory
-    private var maxConcurrentRows: Int { configuration.maxConcurrentRows }
+    private var maxConcurrentRows: Int { max(1, configuration.maxConcurrentRows) }
 
     // MARK: - Initialization
 
@@ -58,18 +62,15 @@ public actor PostgresDataStream {
         self.logger = logger
         self.operationStart = operationStart
         self.formatterEngine = PostgresFormatterEngine(configuration: configuration)
-        self.lastProgressUpdate = operationStart
     }
 
     // MARK: - Column Management
 
     /// Set column information (called once when first row is processed)
-    public func setColumns(_ newColumns: [ColumnInfo]) {
+    public func setColumns(_ newColumns: [ColumnInfo]) async {
         guard columns.isEmpty else { return }
         columns = newColumns
-        Task {
-            await formatterEngine.setColumns(newColumns)
-        }
+        await formatterEngine.setColumns(newColumns)
     }
 
     // MARK: - Row Processing
@@ -78,93 +79,50 @@ public actor PostgresDataStream {
     public func appendRow(_ row: PostgresRow) async {
         guard state == .streaming else { return }
 
-        let rowIndex = totalRowCount
-
-        // Extract column information if this is the first row
         if columns.isEmpty {
-            let newColumns = row.map { cell in
-                ColumnInfo(
-                    name: cell.columnName,
-                    dataType: "\(cell.dataType)",
-                    isPrimaryKey: false, // TODO: Extract from metadata if available
-                    isNullable: true // TODO: Extract from metadata if available
-                )
-            }
-            setColumns(newColumns)
+            await setColumns(PostgresRowExtractor.columns(from: row))
         }
 
-        // Convert row to raw payload
-        let payload = convertRowToPayload(row, rowIndex: rowIndex)
+        let payload = convertRowToPayload(row, rowIndex: totalRowCount)
         rawRows.append(payload)
-
-        // Decide formatting strategy based on configuration and row index
-        let shouldFormatImmediately = shouldFormatRowImmediately(rowIndex: rowIndex)
-        var formattedRow: [String?] = []
-
-        if shouldFormatImmediately {
-            formattedRow = await formatterEngine.formatRow(payload)
-            formattedRows.append(formattedRow)
-        } else if configuration.formattingEnabled {
-            // For deferred formatting, add placeholder efficiently
-            if formattedRows.count <= rowIndex {
-                formattedRows.append(Array(repeating: nil, count: columns.count))
-            } else {
-                // Row already exists as placeholder, nothing to do
-            }
+        if shouldFormatRowImmediately(rowIndex: totalRowCount) {
+            formattedStorage.append(await formatterEngine.formatRow(payload))
+        } else {
+            formattedStorage.append(nil)
         }
-
         totalRowCount += 1
-
-        // Enforce memory limits
-        await enforceMemoryLimits()
-
-        // Update progress if needed
-        await maybeUpdateProgress()
+        enforceMemoryLimits()
     }
 
-    /// Get formatted rows in a specific range (for incremental loading)
+    /// Get formatted rows in a specific range (absolute indexes). Rows no longer in memory are skipped.
     public func getFormattedRows(in range: Range<Int>) async -> [[String?]] {
-        let startIndex = max(0, range.lowerBound)
-        let endIndex = min(totalRowCount, range.upperBound)
+        let lower = max(range.lowerBound, firstRetainedRowIndex)
+        let upper = min(range.upperBound, totalRowCount)
+        guard lower < upper else { return [] }
 
         var result: [[String?]] = []
-
-        for i in startIndex..<endIndex {
-            if i < formattedRows.count {
-                let row = formattedRows[i]
-                if row.contains(nil) && configuration.formattingEnabled {
-                    // Need to format this row on-demand
-                    if i < rawRows.count {
-                        let formattedRow = await formatterEngine.formatRow(rawRows[i])
-                        // Store formatted row for future use
-                        if i < formattedRows.count {
-                            formattedRows[i] = formattedRow
-                        }
-                        result.append(formattedRow)
-                    } else {
-                        result.append(row)
-                    }
-                } else {
-                    result.append(row)
-                }
+        result.reserveCapacity(upper - lower)
+        for absolute in lower..<upper {
+            let local = absolute - firstRetainedRowIndex
+            if let formatted = formattedStorage[local] {
+                result.append(formatted)
+            } else if configuration.formattingEnabled {
+                let formatted = await formatterEngine.formatRow(rawRows[local])
+                formattedStorage[local] = formatted
+                result.append(formatted)
             } else {
-                // Row not yet available
                 result.append(Array(repeating: nil, count: columns.count))
             }
         }
-
         return result
     }
 
-    /// Get raw rows in a specific range (for deferred formatting)
+    /// Get raw rows in a specific range (absolute indexes). Rows no longer in memory are skipped.
     public func getRawRows(in range: Range<Int>) async -> [ResultRowPayload] {
-        let startIndex = max(0, range.lowerBound)
-        let endIndex = min(totalRowCount, range.upperBound)
-
-        guard startIndex < rawRows.count else { return [] }
-
-        let endIndexClamped = min(endIndex, rawRows.count)
-        return Array(rawRows[startIndex..<endIndexClamped])
+        let lower = max(range.lowerBound, firstRetainedRowIndex)
+        let upper = min(range.upperBound, totalRowCount)
+        guard lower < upper else { return [] }
+        return Array(rawRows[(lower - firstRetainedRowIndex)..<(upper - firstRetainedRowIndex)])
     }
 
     /// Get current row count for live counter
@@ -176,9 +134,9 @@ public actor PostgresDataStream {
     public func getMetrics() async -> PostgresStreamMetrics {
         let now = Date().timeIntervalSinceReferenceDate
         return PostgresStreamMetrics(
-            batchRowCount: 0, // This would be set in batch operations
+            batchRowCount: 0,
             loopElapsed: now - operationStart,
-            decodeDuration: 0, // This would be tracked in batch operations
+            decodeDuration: 0,
             totalElapsed: now - operationStart,
             cumulativeRowCount: totalRowCount,
             fetchRowCount: totalRowCount
@@ -189,10 +147,10 @@ public actor PostgresDataStream {
     public func complete(with commandTag: String? = nil) async {
         state = .completed
         self.commandTag = commandTag
-
-        // Format any remaining unformatted rows if configured to do so
         if configuration.formattingEnabled && configuration.formattingMode != .deferred {
-            await formatAllRemainingRows()
+            for local in formattedStorage.indices where formattedStorage[local] == nil {
+                formattedStorage[local] = await formatterEngine.formatRow(rawRows[local])
+            }
         }
     }
 
@@ -210,98 +168,35 @@ public actor PostgresDataStream {
 
     // MARK: - Private Helper Methods
 
-    /// Convert PostgreSQL row to raw payload
     private func convertRowToPayload(_ row: PostgresRow, rowIndex: Int) -> ResultRowPayload {
         let cells = row.map { cell in
-            let formatRaw = UInt8(clamping: cell.format.rawValue)
-            let format = ResultCellPayload.Format(rawValue: formatRaw) ?? .text
-
-            let data: Data?
-            if var buffer = cell.bytes {
-                let readable = buffer.readableBytes
-                if readable > 0 {
-                    if let extracted = buffer.readData(length: readable) {
-                        data = extracted
-                    } else if let bytes = buffer.readBytes(length: readable) {
-                        data = Data(bytes)
-                    } else {
-                        data = Data()
-                    }
-                } else {
-                    data = Data()
-                }
-            } else {
-                data = nil
+            let format = ResultCellPayload.Format(rawValue: UInt8(clamping: cell.format.rawValue)) ?? .text
+            let data = cell.bytes.map { buffer in
+                buffer.withUnsafeReadableBytes { Data($0) }
             }
-
             return ResultCellPayload(dataTypeOID: cell.dataType.rawValue, format: format, bytes: data)
         }
-
         return ResultRowPayload(cells: cells, rowIndex: rowIndex)
     }
 
-    /// Determine if a row should be formatted immediately based on configuration
     private func shouldFormatRowImmediately(rowIndex: Int) -> Bool {
         guard configuration.formattingEnabled else { return false }
-
         switch configuration.formattingMode {
-        case .immediate:
-            return true
-        case .deferred:
-            return false
-        case .smart:
-            return rowIndex < configuration.initialPreviewRows
+        case .immediate: return true
+        case .deferred: return false
+        case .smart: return rowIndex < configuration.initialPreviewRows
         }
     }
 
-    /// Enforce memory limits by removing old data
-    private func enforceMemoryLimits() async {
-        guard totalRowCount > maxConcurrentRows else { return }
-
-        let rowsToRemove = totalRowCount - maxConcurrentRows
-
-        // Remove oldest raw rows
-        if rowsToRemove < rawRows.count {
-            rawRows.removeFirst(rowsToRemove)
-        }
-
-        // Remove oldest formatted rows
-        if rowsToRemove < formattedRows.count {
-            formattedRows.removeFirst(rowsToRemove)
-        }
-
+    /// Drops the oldest rows once the retained count exceeds the limit by 10%, so trimming is
+    /// amortised instead of an O(n) `removeFirst` per row.
+    private func enforceMemoryLimits() {
+        let slack = max(1, maxConcurrentRows / 10)
+        guard rawRows.count > maxConcurrentRows + slack else { return }
+        let rowsToRemove = rawRows.count - maxConcurrentRows
+        rawRows.removeFirst(rowsToRemove)
+        formattedStorage.removeFirst(rowsToRemove)
+        firstRetainedRowIndex += rowsToRemove
         logger.debug("Enforced memory limits: removed \(rowsToRemove) rows")
-    }
-
-    /// Update progress if throttling allows
-    private func maybeUpdateProgress() async {
-        guard configuration.liveCounterEnabled else { return }
-
-        let now = Date().timeIntervalSinceReferenceDate
-        let timeSinceLastUpdate = now - lastProgressUpdate
-        let rowsSinceLastUpdate = totalRowCount - lastProgressRowCount
-
-        // Update if either condition is met (more responsive)
-        let shouldUpdateByTime = timeSinceLastUpdate >= configuration.progressThrottle
-        let shouldUpdateByCount = rowsSinceLastUpdate >= configuration.liveCounterFrequency
-
-        if shouldUpdateByTime || shouldUpdateByCount {
-            lastProgressUpdate = now
-            lastProgressRowCount = totalRowCount
-        }
-    }
-
-    /// Format all remaining unformatted rows (used on completion)
-    private func formatAllRemainingRows() async {
-        for i in 0..<rawRows.count {
-            if i >= formattedRows.count || formattedRows[i].contains(nil) {
-                let formattedRow = await formatterEngine.formatRow(rawRows[i])
-                if i < formattedRows.count {
-                    formattedRows[i] = formattedRow
-                } else {
-                    formattedRows.append(formattedRow)
-                }
-            }
-        }
     }
 }
