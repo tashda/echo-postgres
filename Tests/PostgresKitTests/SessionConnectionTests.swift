@@ -69,6 +69,51 @@ final class SessionConnectionTests: PostgresKitTestCase {
         XCTAssertEqual(value1, .idle)
     }
 
+    func testTransactionStartAndStatementCountAreTracked() async throws {
+        XCTAssertNil(session.transactionStartedAt)
+        _ = try await session.queryResult("BEGIN")
+        let started = try XCTUnwrap(session.transactionStartedAt)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        XCTAssertEqual(session.statementsInTransaction, 0, "BEGIN itself does not count")
+        _ = try await session.queryResult("CREATE TEMP TABLE count_t (id int)")
+        for try await _ in try await session.query("SELECT 1") {}
+        XCTAssertEqual(session.statementsInTransaction, 2)
+        do { _ = try await session.queryResult("SELECT 1 / 0") } catch {}
+        XCTAssertEqual(session.statementsInTransaction, 2, "a failed statement does not count")
+        XCTAssertEqual(session.transactionStartedAt, started)
+        _ = try await session.queryResult("ROLLBACK")
+        XCTAssertNil(session.transactionStartedAt)
+        XCTAssertEqual(session.statementsInTransaction, 0)
+    }
+
+    func testBlockingSessionsNameWhoHoldsTheLock() async throws {
+        let table = "blocking_\(UInt32.random(in: 0..<UInt32.max))"
+        _ = try await admin.simpleQueryResult("CREATE TABLE \(table) (id int)")
+        let holder = try await PostgresSessionConnection.connect(configuration: TestEnv.configuration(applicationName: "LockHolder"), logger: logger)
+        _ = try await holder.queryResult("BEGIN")
+        _ = try await holder.queryResult("LOCK TABLE \(table) IN ACCESS EXCLUSIVE MODE")
+
+        let none = try await admin.blockingSessions(of: session.backendPID)
+        XCTAssertTrue(none.isEmpty, "not waiting yet")
+        let session = self.session!
+        let waiting = Task { try await session.queryResult("SELECT count(*) FROM \(table)") }
+        var blockers: [PostgresBlockingSession] = []
+        for _ in 0..<50 where blockers.isEmpty {
+            try await Task.sleep(for: .milliseconds(100))
+            blockers = try await admin.blockingSessions(of: session.backendPID)
+        }
+        XCTAssertEqual(blockers.first?.pid, holder.backendPID)
+        XCTAssertEqual(blockers.first?.applicationName, "LockHolder")
+        XCTAssertEqual(blockers.first?.state, "idle in transaction")
+        XCTAssertNotNil(blockers.first?.transactionStartedAt)
+        XCTAssertTrue(blockers.first?.query?.contains("LOCK TABLE") == true)
+
+        _ = try await holder.queryResult("ROLLBACK")
+        _ = try await waiting.value
+        await holder.close()
+        _ = try await admin.simpleQueryResult("DROP TABLE \(table)")
+    }
+
     func testRefreshDetectsTransactionsStartedInsideStatements() async throws {
         let value2 = try await session.refreshTransactionStatus()
         XCTAssertEqual(value2, .idle)

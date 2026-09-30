@@ -54,6 +54,8 @@ public final class PostgresSessionConnection: @unchecked Sendable {
         var transactionStatus: PostgresTransactionStatus = .idle
         var isClosed = false
         var transactionLost = false
+        var transactionStartedAt: Date?
+        var statementsInTransaction = 0
         var queriesInFlight = 0
         var lastActivity = Date()
     }
@@ -141,6 +143,13 @@ public final class PostgresSessionConnection: @unchecked Sendable {
 
     /// Whether the connection closed while a transaction was open (the server rolled it back).
     public var transactionWasLost: Bool { state.withLockedValue { $0.isClosed && $0.transactionLost } }
+
+    /// When the open transaction began (its `BEGIN` finished), `nil` outside a transaction.
+    public var transactionStartedAt: Date? { state.withLockedValue { $0.transactionStartedAt } }
+
+    /// Statements that succeeded inside the open transaction, not counting `BEGIN` (for a close
+    /// prompt: "open for 12 minutes, 3 statements").
+    public var statementsInTransaction: Int { state.withLockedValue { $0.statementsInTransaction } }
 
     // MARK: - Queries
 
@@ -242,7 +251,15 @@ public final class PostgresSessionConnection: @unchecked Sendable {
         } catch let error as PostgresError where error.sqlState == "25P02" {
             status = .failed
         }
-        state.withLockedValue { $0.transactionStatus = status }
+        state.withLockedValue { state in
+            state.transactionStatus = status
+            if status == .idle {
+                state.transactionStartedAt = nil
+                state.statementsInTransaction = 0
+            } else if state.transactionStartedAt == nil {
+                state.transactionStartedAt = Date()
+            }
+        }
         return status
     }
 
@@ -333,15 +350,23 @@ public final class PostgresSessionConnection: @unchecked Sendable {
             guard !state.isClosed else { return }
             if error == nil {
                 switch effect {
-                case .begin, .chain, .rollbackToSavepoint: state.transactionStatus = .inTransaction
+                case .begin, .chain:
+                    state.transactionStatus = .inTransaction
+                    state.transactionStartedAt = Date()
+                    state.statementsInTransaction = 0
+                case .rollbackToSavepoint: state.transactionStatus = .inTransaction
                 case .end: state.transactionStatus = .idle
-                case .none: break
+                case .none: if state.transactionStatus != .idle { state.statementsInTransaction += 1 }
                 }
             } else if effect == .end {
                 // A failed COMMIT still ends the transaction block (it is rolled back).
                 state.transactionStatus = .idle
             } else if state.transactionStatus != .idle {
                 state.transactionStatus = .failed
+            }
+            if state.transactionStatus == .idle {
+                state.transactionStartedAt = nil
+                state.statementsInTransaction = 0
             }
         }
     }
