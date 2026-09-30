@@ -8,7 +8,7 @@ import PostgresWire
 /// or the legacy `WITH CSV HEADER DELIMITER ','` form.
 internal struct CopyStatement {
     enum Direction { case `in`, out }
-    enum Format { case csv, text }
+    enum Format { case csv, text, binary }
 
     var direction: Direction
     var schema: String?
@@ -163,12 +163,13 @@ internal struct CopyStatement {
                 switch value()?.lowercased() {
                 case "csv": format = .csv
                 case "text": format = .text
-                default: throw PostgresKitError.notSupported("Only CSV and text COPY formats are supported")
+                case "binary": format = .binary
+                default: throw PostgresKitError.notSupported("Unknown COPY format")
                 }
             case "CSV":
                 format = .csv
             case "BINARY":
-                throw PostgresKitError.notSupported("Binary COPY is not supported")
+                format = .binary
             case "HEADER":
                 header = true
                 if index + 1 < tokens.count, ["TRUE", "FALSE", "ON", "OFF", "1", "0", "MATCH"].contains(tokens[index + 1].value.uppercased()) {

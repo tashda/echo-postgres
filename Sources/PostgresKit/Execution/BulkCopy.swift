@@ -28,7 +28,7 @@ public struct PostgresBulkCopy: @unchecked Sendable {
         self.options = options
     }
 
-    /// Run `COPY table|(query) TO STDOUT` in CSV or text format and stream the output.
+    /// Run `COPY table|(query) TO STDOUT` in CSV, text or binary format and stream the output.
     ///
     /// Rows are read with a regular query and rendered by ``PostgresBinaryFormatter``, so every type
     /// is written in its Postgres text form; NULL and empty strings stay distinguishable.
@@ -54,7 +54,17 @@ public struct PostgresBulkCopy: @unchecked Sendable {
                         func line(_ fields: [String?]) -> String {
                             format == .csv ? writer.line(fields) : CSVWriter.textLine(fields, delimiter: delimiter)
                         }
+                        if format == .binary { buffer.append(BinaryCopyFormat.header) }
                         for try await row in try await connection.simpleQuery(selectSQL) {
+                            if format == .binary {
+                                // Result cells arrive in each type's binary send format: exactly COPY BINARY's field format.
+                                BinaryCopyFormat.appendTuple(row.map { cell in cell.bytes.map { buffer in buffer.withUnsafeReadableBytes { Data($0) } } }, to: &buffer)
+                                if buffer.count >= chunkSize {
+                                    continuation.yield(buffer)
+                                    buffer.removeAll(keepingCapacity: true)
+                                }
+                                continue
+                            }
                             if header && !wroteHeader {
                                 buffer.append(contentsOf: line(row.map { $0.columnName }).utf8)
                                 wroteHeader = true
@@ -65,6 +75,7 @@ public struct PostgresBulkCopy: @unchecked Sendable {
                                 buffer.removeAll(keepingCapacity: true)
                             }
                         }
+                        if format == .binary { buffer.append(BinaryCopyFormat.trailer) }
                         return buffer
                     }
                     if !remainder.isEmpty { continuation.yield(remainder) }
@@ -81,7 +92,8 @@ public struct PostgresBulkCopy: @unchecked Sendable {
     /// over the COPY protocol. The load is one statement: either every row is stored or none is.
     ///
     /// CSV input is parsed client-side (RFC 4180, including quoted multi-line fields) and re-encoded
-    /// as COPY text; text input is passed through unchanged.
+    /// as COPY text; text input is passed through unchanged; binary input is decoded with the target
+    /// columns' types and re-encoded as COPY text (PostgresNIO sends COPY data in text format only).
     public func copyIn<S: AsyncSequence>(sql: String, source: S) async throws where S.Element == Data {
         let parsed = try CopyStatement.parse(sql: sql)
         guard parsed.direction == .in, let table = parsed.table else {
@@ -89,6 +101,7 @@ public struct PostgresBulkCopy: @unchecked Sendable {
         }
         let chunkSize = max(16 * 1024, options.chunkSizeBytes)
         let logger = self.logger
+        let columnOIDs = parsed.format == .binary ? try await targetColumnOIDs(parsed) : []
 
         do {
             try await client.wire.withConnection { connection in
@@ -104,6 +117,21 @@ public struct PostgresBulkCopy: @unchecked Sendable {
                         for try await chunk in source where !chunk.isEmpty {
                             try await writer.write(ByteBuffer(bytes: chunk))
                         }
+                    }
+                case .binary:
+                    var converter = BinaryCopyToTextConverter(oids: columnOIDs)
+                    try await connection.copyFrom(schema: parsed.schema, table: table, columns: parsed.columns, logger: logger) { writer in
+                        var output: [UInt8] = []
+                        output.reserveCapacity(chunkSize)
+                        for try await chunk in source {
+                            try converter.feed(chunk, into: &output)
+                            if output.count >= chunkSize {
+                                try await writer.write(ByteBuffer(bytes: output))
+                                output.removeAll(keepingCapacity: true)
+                            }
+                        }
+                        try converter.finish()
+                        if !output.isEmpty { try await writer.write(ByteBuffer(bytes: output)) }
                     }
                 case .csv:
                     var converter = try CSVToCopyTextConverter(
@@ -131,6 +159,29 @@ public struct PostgresBulkCopy: @unchecked Sendable {
             throw error
         } catch {
             throw PostgresError.from(error)
+        }
+    }
+
+    /// Type OIDs of the COPY target columns, in COPY order (all non-dropped columns, or the listed ones).
+    private func targetColumnOIDs(_ parsed: CopyStatement) async throws -> [UInt32] {
+        let result = try await client.simpleQueryResult("""
+            SELECT a.attname, a.atttypid::int8
+            FROM pg_attribute a
+            WHERE a.attrelid = \(PostgresQuoting.quoteLiteral(parsed.qualifiedTableName))::regclass
+              AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+            """)
+        var byName: [String: UInt32] = [:]
+        var ordered: [UInt32] = []
+        for row in result.rows {
+            let (name, oid) = try row.decode((String, Int64).self)
+            byName[name] = UInt32(oid)
+            ordered.append(UInt32(oid))
+        }
+        guard !parsed.columns.isEmpty else { return ordered }
+        return try parsed.columns.map { column in
+            guard let oid = byName[column] else { throw PostgresKitError.notSupported("Column \(column) does not exist in \(parsed.qualifiedTableName)") }
+            return oid
         }
     }
 }
