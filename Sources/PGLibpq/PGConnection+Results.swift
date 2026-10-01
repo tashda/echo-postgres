@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 extension PGConnection {
     /// Sends SQL with the simple query protocol: several statements in one string work, and each
     /// gives its own results. Rows come in chunks of `chunkSize` (`PQsetChunkedRowsMode`).
@@ -11,6 +21,33 @@ extension PGConnection {
         try await flush()
     }
 
+    /// Sends one statement with `$n` parameters (extended protocol, unnamed statement, text
+    /// results). Only one statement per string.
+    public func send(_ sql: String, parameters: [PGParameter], chunkSize: Int = 512) async throws {
+        let handle = try readyHandle()
+        let sent = parameters.withCArrays { types, values, lengths, formats in
+            PQsendQueryParams(handle, sql, Int32(parameters.count), types, values, lengths, formats, 0)
+        }
+        guard sent == 1 else { throw PGConnectionError(.sendFailed, message: errorMessage) }
+        isBusy = true
+        if chunkSize > 1 { _ = PQsetChunkedRowsMode(handle, Int32(chunkSize)) }
+        try await flush()
+    }
+
+    /// Runs one statement with parameters and returns every result.
+    public func execute(_ sql: String, parameters: [PGParameter]) async throws -> [PGResult] {
+        try await send(sql, parameters: parameters, chunkSize: 1)
+        var results: [PGResult] = []
+        while let result = try await nextResult() { results.append(result) }
+        return results
+    }
+
+    /// Reads and drops what is left of the statement(s) sent (after a cancel, or when the caller
+    /// stopped reading), so the connection is ready for the next one.
+    public func drain() async throws {
+        while isBusy, try await nextResult() != nil {}
+    }
+
     /// The next result of the statement(s) sent, or nil when all were read. Waits for the server
     /// without blocking; nothing is read from the socket until asked, so a slow reader slows the
     /// server down instead of filling memory.
@@ -22,6 +59,7 @@ extension PGConnection {
                 isBusy = false
                 throw PGConnectionError(.connectionLost, message: errorMessage)
             }
+            collectNotifications()
         }
         guard let result = PQgetResult(handle) else {
             isBusy = false

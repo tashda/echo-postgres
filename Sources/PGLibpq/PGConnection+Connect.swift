@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 extension PGConnection {
     /// `PQconnectStartParams` + `PQconnectPoll`, waiting on the socket between steps. libpq may
     /// switch sockets (another host, a TLS or GSS retry), so the socket is read again each time.

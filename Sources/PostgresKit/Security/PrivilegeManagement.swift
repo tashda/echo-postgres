@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// High-level Privilege and Role Grant management.
 public extension PostgresSecurityClient {

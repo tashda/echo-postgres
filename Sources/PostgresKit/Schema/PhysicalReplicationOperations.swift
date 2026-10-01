@@ -1,5 +1,4 @@
 import Foundation
-import PostgresWire
 
 /// A standby streaming from this server (`pg_stat_replication`).
 public struct PostgresStandbyInfo: Sendable, Equatable {

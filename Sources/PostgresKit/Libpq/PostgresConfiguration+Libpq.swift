@@ -144,7 +144,12 @@ extension PostgresConfiguration {
             parameters.set("sslcertmode", "disable")
             return nil
         }
-        let files = try ClientCertificateFiles.make(certificatePath: sslCertPath, keyPath: sslKeyPath, password: sslKeyPassword)
+        let files: ClientCertificateFiles
+        do {
+            files = try ClientCertificateFiles.make(certificatePath: sslCertPath, keyPath: sslKeyPath, password: sslKeyPassword)
+        } catch {
+            throw PostgresTLSFileError(error)
+        }
         parameters.set("sslcert", files.certificatePath)
         parameters.set("sslkey", files.keyPath)
         parameters.set("sslpassword", files.keyPassword)

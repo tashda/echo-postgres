@@ -1,6 +1,6 @@
 import Foundation
 import Logging
-import NIOConcurrencyHelpers
+import Synchronization
 import XCTest
 @testable import PostgresKit
 
@@ -138,34 +138,33 @@ final class ConnectionFeaturesTests: PostgresKitTestCase {
 
     // MARK: - Credentials
 
-    func testPoolIsReplacedBeforeTheCredentialExpires() async throws {
-        let calls = NIOLockedValueBox(0)
+    func testPasswordProviderIsAskedForEachNewConnection() async throws {
+        let calls = Mutex(0)
         let password = TestEnv.password
         let config = configuration {
             $0.password = "wrong"
             $0.passwordProvider = {
-                calls.withLockedValue { $0 += 1 }
-                // Inside the rotation margin, so the next use replaces the pool.
+                calls.withLock { $0 += 1 }
                 return PostgresCredential(password: password, expiresAt: Date().addingTimeInterval(100))
             }
         }
         let client = try await PostgresKit.PostgresClient.connect(configuration: config, logger: logger)
         defer { client.close() }
-        XCTAssertEqual(calls.withLockedValue { $0 }, 1)
+        XCTAssertEqual(calls.withLock { $0 }, 1)
         let first = try await client.simpleQueryResult("SELECT 1")
         XCTAssertEqual(first.rows.count, 1)
-        XCTAssertGreaterThanOrEqual(calls.withLockedValue { $0 }, 2, "the pool was rebuilt with a fresh credential")
-        let second = try await client.simpleQueryResult("SELECT 2")
-        XCTAssertEqual(second.rows.count, 1)
+        XCTAssertEqual(calls.withLock { $0 }, 1, "the idle connection is reused")
 
         let session = try await PostgresSessionConnection.connect(configuration: config, logger: logger)
+        XCTAssertEqual(calls.withLock { $0 }, 2, "a new connection asks for a fresh credential")
         await session.close()
     }
 
     func testSSLModeAllowUsesPlainWhenAccepted() async throws {
         let client = try await PostgresKit.PostgresClient.connect(configuration: configuration { $0.sslMode = .allow }, logger: logger)
         defer { client.close() }
-        XCTAssertEqual(client.wire.resolvedConfiguration.sslMode, .disable)
+        let encryption = try await client.withConnection { await $0.connection.encryption }
+        XCTAssertEqual(encryption, .none)
     }
 
     // MARK: - Binary COPY
@@ -190,7 +189,7 @@ final class ConnectionFeaturesTests: PostgresKitTestCase {
         let bulk = PostgresBulkCopy(client: client, logger: logger)
         var exported = Data()
         for try await chunk in try await bulk.copyOut(sql: "COPY \(source) TO STDOUT (FORMAT binary)") { exported.append(chunk) }
-        XCTAssertTrue(exported.starts(with: BinaryCopyFormat.signature))
+        XCTAssertTrue(exported.starts(with: Data("PGCOPY\n".utf8) + Data([0xFF, 0x0D, 0x0A, 0x00])))
 
         let bytes = Array(exported)
         let stream = AsyncThrowingStream<Data, Error> { continuation in
@@ -214,7 +213,9 @@ final class ConnectionFeaturesTests: PostgresKitTestCase {
 
     // MARK: - Types without a binary output function
 
-    func testColumnsWithoutBinaryOutputFallBackToText() async throws {
+    /// Values arrive as text, so types without a binary output function (`aclitem`) read like any
+    /// other, inside a transaction too (PostgresNIO needed a text-cast retry outside one).
+    func testColumnsWithoutBinaryOutputRead() async throws {
         let session = try await PostgresSessionConnection.connect(configuration: configuration { _ in }, logger: logger)
         defer { Task { await session.close() } }
         let formatter = PostgresCellFormatter()
@@ -228,17 +229,9 @@ final class ConnectionFeaturesTests: PostgresKitTestCase {
         XCTAssertEqual(rows.count, 3)
         XCTAssertTrue(rows.allSatisfy { ($0[1] ?? "").hasPrefix("{") && ($0[1] ?? "").contains("=") }, "\(rows)")
 
+        _ = try await session.queryResult("BEGIN")
         let result = try await session.queryResult("SELECT relacl FROM pg_class WHERE relacl IS NOT NULL LIMIT 1")
         XCTAssertEqual(result.rows.count, 1)
-
-        _ = try await session.queryResult("BEGIN")
-        do {
-            _ = try await session.queryResult("SELECT relacl FROM pg_class WHERE relacl IS NOT NULL LIMIT 1")
-            XCTFail("inside a transaction the error cannot be retried")
-        } catch let error as PostgresError {
-            XCTAssertEqual(error.sqlState, "42883")
-            XCTAssertEqual(error.hint, PostgresSessionConnection.binaryOutputHint)
-        }
         _ = try await session.queryResult("ROLLBACK")
     }
 }

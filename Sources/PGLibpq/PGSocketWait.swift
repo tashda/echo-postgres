@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Dispatch
 import Synchronization
 

@@ -1,5 +1,4 @@
 import Foundation
-import PostgresWire
 
 /// A pgAgent job to create: steps run in order, schedules say when.
 public struct PgAgentJobDefinition: Sendable, Hashable {
@@ -86,19 +85,19 @@ public extension PostgresPgAgentClient {
     /// Creates the job with its steps and schedules in one transaction; returns the job ID.
     @discardableResult
     func createJob(_ job: PgAgentJobDefinition) async throws -> Int {
-        let jobBinds = try [job.jobClass, job.name, job.description].map { try client.toPGData(value: $0) } + [try client.toPGData(value: job.isEnabled)]
+        let jobBinds = try [job.jobClass, job.name, job.description].map { try client.bind($0) } + [try client.bind(job.isEnabled)]
         let stepBinds = try job.steps.map { step in
             // pgAgent insists that batch steps name no database.
             try [step.name, step.kind.rawValue, step.code, step.kind == .batch ? "" : step.database, step.onError.rawValue]
-                .map { try client.toPGData(value: $0) }
-                + [try client.toPGData(value: step.isEnabled)]
+                .map { try client.bind($0) }
+                + [try client.bind(step.isEnabled)]
         }
         let scheduleBinds = try job.schedules.map { schedule in
-            try [client.toPGData(value: schedule.name), client.toPGData(value: schedule.start)]
-                + [schedule.end.map { try client.toPGData(value: $0) } ?? PGData(type: .timestamptz, value: nil)]
+            try [client.bind(schedule.name), client.bind(schedule.start)]
+                + [schedule.end.map { try client.bind($0) } ?? PostgresBind.null]
                 + [Self.mask(schedule.minutes, 0..<60), Self.mask(schedule.hours, 0..<24), Self.mask(schedule.weekdays, 0..<7),
-                   Self.mask(schedule.monthDays, 1..<33), Self.mask(schedule.months, 1..<13)].map { try client.toPGData(value: $0) }
-                + [try client.toPGData(value: schedule.isEnabled)]
+                   Self.mask(schedule.monthDays, 1..<33), Self.mask(schedule.months, 1..<13)].map { try client.bind($0) }
+                + [try client.bind(schedule.isEnabled)]
         }
         return try await client.withTransaction { connection in
             var jobID: Int?
@@ -108,7 +107,7 @@ public extension PostgresPgAgentClient {
                 """, binds: jobBinds)
             for try await id in created.decode(Int32.self) { jobID = Int(id) }
             guard let jobID else { throw PostgresKit.PostgresError.protocolError("No pgAgent job class named \(job.jobClass)") }
-            let idBind = try client.toPGData(value: jobID)
+            let idBind = try client.bind(jobID)
             for binds in stepBinds {
                 let rows = try await connection.query("""
                     INSERT INTO pgagent.pga_jobstep (jstjobid, jstname, jstkind, jstcode, jstdbname, jstonerror, jstenabled)
@@ -147,7 +146,7 @@ public extension PostgresPgAgentClient {
     }
 
     func setEnabled(jobID: Int, enabled: Bool) async throws {
-        let binds = [try client.toPGData(value: enabled), try client.toPGData(value: jobID)]
+        let binds = [try client.bind(enabled), try client.bind(jobID)]
         try await client.withConnection { connection in
             for try await _ in try await connection.query("UPDATE pgagent.pga_job SET jobenabled = $1 WHERE jobid = $2::int", binds: binds) {}
         }
@@ -155,7 +154,7 @@ public extension PostgresPgAgentClient {
 
     /// Deletes the job; its steps, schedules and logs go with it.
     func deleteJob(id: Int) async throws {
-        let bind = try client.toPGData(value: id)
+        let bind = try client.bind(id)
         try await client.withConnection { connection in
             for try await _ in try await connection.query("DELETE FROM pgagent.pga_job WHERE jobid = $1::int", binds: [bind]) {}
         }

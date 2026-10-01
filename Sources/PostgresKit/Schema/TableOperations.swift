@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// High-level Table Data Definition Language (DDL) operations.
 public extension PostgresAdminClient {

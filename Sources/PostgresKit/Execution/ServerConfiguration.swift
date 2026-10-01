@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Server configuration management.
 public extension PostgresServerConfigClient {

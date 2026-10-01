@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 /// The fields of a server error or notice (every `PG_DIAG_*` libpq reports).
 public struct PGServerError: Error, Sendable, Equatable {
     public var severity: String?

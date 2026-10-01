@@ -124,7 +124,7 @@ final class ViewAndMaterializedViewTests: PostgresKitTestCase {
     /// Server-side prepared statements return binary rows; booleans and integers must decode.
     func testPreparedRowsDecodeNonTextColumns() async throws {
         let client = try XCTUnwrap(self.client)
-        let schema = try client.toPGData(value: "pg_catalog")
+        let schema = try client.bind("pg_catalog")
         let rows = try await client.withConnection { connection in
             try await connection.queryPreparedRows("SELECT nspname = $1, 42::int8, 'x'::text FROM pg_namespace WHERE nspname = $1", binds: [schema])
         }

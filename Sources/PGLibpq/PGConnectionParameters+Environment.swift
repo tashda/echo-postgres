@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 extension PGConnectionParameters {
     /// A path that never exists (`/var/empty` is empty and root-owned on macOS and Linux).
     static let missingFile = "/var/empty/echo-no-file"

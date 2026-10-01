@@ -1,5 +1,4 @@
 import Foundation
-import PostgresWire
 
 /// A scheduled job from `cron.job`.
 public struct PostgresCronJob: Sendable, Hashable {
@@ -29,8 +28,8 @@ public extension PostgresCronClient {
     /// Scheduling an existing name replaces that job. Returns the job's ID.
     @discardableResult
     func schedule(name: String, schedule: String, command: String, database: String? = nil) async throws -> Int64 {
-        let binds = try [name, schedule, command].map { try client.toPGData(value: $0) }
-            + (database.map { [try client.toPGData(value: $0)] } ?? [])
+        let binds = try [name, schedule, command].map { try client.bind($0) }
+            + (database.map { [try client.bind($0)] } ?? [])
         let sql = database == nil
             ? "SELECT cron.schedule($1, $2, $3)"
             : "SELECT cron.schedule_in_database($1, $2, $3, $4)"
@@ -44,7 +43,7 @@ public extension PostgresCronClient {
     /// Removes the job named `name`; false when there was none.
     @discardableResult
     func unschedule(name: String) async throws -> Bool {
-        let bind = try client.toPGData(value: name)
+        let bind = try client.bind(name)
         return try await client.withConnection { connection in
             let rows = try await connection.query("SELECT cron.unschedule($1)", binds: [bind])
             for try await removed in rows.decode(Bool.self) { return removed }
@@ -54,7 +53,7 @@ public extension PostgresCronClient {
 
     /// Pauses or resumes a job.
     func setActive(jobID: Int64, active: Bool) async throws {
-        let binds = [try client.toPGData(value: Int(jobID)), try client.toPGData(value: active)]
+        let binds = [try client.bind(Int(jobID)), try client.bind(active)]
         try await client.withConnection { connection in
             let rows = try await connection.query("SELECT cron.alter_job(job_id := $1, active := $2)", binds: binds)
             for try await _ in rows {}
@@ -77,7 +76,7 @@ public extension PostgresCronClient {
 
     /// The latest runs, newest first.
     func listRuns(limit: Int = 100) async throws -> [PostgresCronRun] {
-        let bind = try client.toPGData(value: max(1, limit))
+        let bind = try client.bind(max(1, limit))
         return try await client.withConnection { connection in
             let rows = try await connection.query(
                 "SELECT runid, jobid, status, return_message, start_time, end_time FROM cron.job_run_details ORDER BY runid DESC LIMIT $1",

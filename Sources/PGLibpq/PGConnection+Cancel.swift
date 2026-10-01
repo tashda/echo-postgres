@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 extension PGConnection {
     /// Asks the server to cancel the running statement (`PQcancelCreate`/`PQcancelPoll`: its own
     /// connection to the same host, encrypted like this one, waited on without blocking). The

@@ -1,6 +1,6 @@
 import Foundation
 import Logging
-import NIOConcurrencyHelpers
+import Synchronization
 import PostgresKit
 import PostgresKitTesting
 import XCTest
@@ -9,13 +9,13 @@ import XCTest
 /// `POSTGRES_TEST_URL` server, created through the driver when the first suite starts and dropped
 /// (with the roles the data made) when the test bundle finishes. The server is left as it was.
 enum SampleDatabase {
-    private static let state = NIOLockedValueBox<String?>(nil)
+    private static let state = Mutex<String?>(nil)
     private static let loader = LoadOnce()
-    private static let observerRegistered = NIOLockedValueBox(false)
+    private static let observerRegistered = Mutex(false)
     static let roles = ["test_readonly", "test_readwrite", "test_app_user"]
 
     /// The database's name once prepared.
-    static var name: String? { state.withLockedValue { $0 } }
+    static var name: String? { state.withLock { $0 } }
 
     /// Creates the database and loads the sample data, once per test process.
     static func prepare(logger: Logger) async throws {
@@ -25,7 +25,7 @@ enum SampleDatabase {
             let admin = try await PostgresClient.connect(configuration: server.configuration, logger: logger)
             defer { admin.close() }
             try await admin.admin.createDatabase(name: name)
-            state.withLockedValue { $0 = name }
+            state.withLock { $0 = name }
             var configuration = server.configuration
             configuration.database = name
             let client = try await PostgresClient.connect(configuration: configuration, logger: logger)
@@ -37,7 +37,7 @@ enum SampleDatabase {
 
     /// Drops the database when the test bundle finishes (registered by the first suite).
     static func registerCleanup() {
-        let first = observerRegistered.withLockedValue { registered -> Bool in
+        let first = observerRegistered.withLock { registered -> Bool in
             defer { registered = true }
             return !registered
         }
@@ -55,7 +55,7 @@ enum SampleDatabase {
         if let cell = others?.rows.first?.first, PostgresCellFormatter().stringValue(for: cell) == "0" {
             for role in roles { _ = try? await admin.simpleQueryResult("DROP ROLE IF EXISTS \(PostgresQuoting.quoteIdentifier(role))") }
         }
-        state.withLockedValue { $0 = nil }
+        state.withLock { $0 = nil }
     }
 
     private static var sampleDataURL: URL {

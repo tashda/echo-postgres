@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// High-level View Data Definition Language (DDL) operations.
 public extension PostgresViewClient {

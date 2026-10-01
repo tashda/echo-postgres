@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// High-level table partitioning and partition management operations.
 public extension PostgresAdminClient {

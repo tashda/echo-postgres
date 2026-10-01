@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Sequence discovery.
 public extension PostgresMetadataClient {
@@ -10,7 +9,7 @@ public extension PostgresMetadataClient {
             ORDER BY sequence_name
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema)])
             return try rows.map { row in
                 let name = try row.decode(String.self)
                 return PostgresSequenceInfo(name: name, schema: schema)

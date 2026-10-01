@@ -1,15 +1,16 @@
 import Foundation
 import Logging
-import NIOCore
-import PostgresWire
+import PGLibpq
 
-/// High-level bulk data movement (COPY) operations.
-public struct PostgresBulkCopy: @unchecked Sendable {
+/// High-level bulk data movement (COPY) operations, through libpq's COPY protocol: every format
+/// (CSV, text, binary) goes to and from the server unchanged.
+public struct PostgresBulkCopy: Sendable {
     public struct Options: Sendable {
+        /// Size of the chunks ``copyOut(sql:)`` yields.
         public var chunkSizeBytes: Int = 64 * 1024
         /// Unused since `copyIn` uses the COPY protocol; kept for source compatibility.
         public var insertBatchSize: Int = 500
-        /// NULL string used when the statement does not specify one.
+        /// Unused: the statement's own `NULL` option applies; kept for source compatibility.
         public var nullString: String? = nil
         public init(chunkSizeBytes: Int = 64 * 1024, insertBatchSize: Int = 500, nullString: String? = nil) {
             self.chunkSizeBytes = chunkSizeBytes
@@ -28,57 +29,18 @@ public struct PostgresBulkCopy: @unchecked Sendable {
         self.options = options
     }
 
-    /// Run `COPY table|(query) TO STDOUT` in CSV, text or binary format and stream the output.
-    ///
-    /// Rows are read with a regular query and rendered by ``PostgresBinaryFormatter``, so every type
-    /// is written in its Postgres text form; NULL and empty strings stay distinguishable.
+    /// Runs `COPY table|(query) TO STDOUT` (any format) and streams the server's output.
     public func copyOut(sql: String) async throws -> AsyncThrowingStream<Data, Error> {
         let parsed = try CopyStatement.parse(sql: sql)
         guard parsed.direction == .out else { throw PostgresKitError.notSupported("Expected COPY ... TO STDOUT") }
-
         let chunkSize = max(16 * 1024, options.chunkSizeBytes)
-        let writer = CSVWriter(delimiter: parsed.delimiter, quote: parsed.quote, nullString: parsed.nullString ?? options.nullString ?? "")
         let client = self.client
         return AsyncThrowingStream<Data, Error> { continuation in
-            let task = Task {
+            let task = Task(name: "postgres-copy-out") {
                 do {
-                    let format = parsed.format
-                    let delimiter = parsed.delimiter
-                    let header = parsed.header
-                    let selectSQL = parsed.selectSQL
-                    let remainder = try await client.withConnection { connection -> Data in
-                        let formatter = PostgresCellFormatter()
-                        var buffer = Data()
-                        buffer.reserveCapacity(chunkSize)
-                        var wroteHeader = false
-                        func line(_ fields: [String?]) -> String {
-                            format == .csv ? writer.line(fields) : CSVWriter.textLine(fields, delimiter: delimiter)
-                        }
-                        if format == .binary { buffer.append(BinaryCopyFormat.header) }
-                        for try await row in try await connection.simpleQuery(selectSQL) {
-                            if format == .binary {
-                                // Result cells arrive in each type's binary send format: exactly COPY BINARY's field format.
-                                BinaryCopyFormat.appendTuple(row.map { cell in cell.bytes.map { buffer in buffer.withUnsafeReadableBytes { Data($0) } } }, to: &buffer)
-                                if buffer.count >= chunkSize {
-                                    continuation.yield(buffer)
-                                    buffer.removeAll(keepingCapacity: true)
-                                }
-                                continue
-                            }
-                            if header && !wroteHeader {
-                                buffer.append(contentsOf: line(row.map { $0.columnName }).utf8)
-                                wroteHeader = true
-                            }
-                            buffer.append(contentsOf: line(row.map { formatter.stringValue(for: $0) }).utf8)
-                            if buffer.count >= chunkSize {
-                                continuation.yield(buffer)
-                                buffer.removeAll(keepingCapacity: true)
-                            }
-                        }
-                        if format == .binary { buffer.append(BinaryCopyFormat.trailer) }
-                        return buffer
+                    try await client.withConnection { connection in
+                        try await PostgresBulkCopy.copyOut(sql, on: connection.connection, chunkSize: chunkSize) { continuation.yield($0) }
                     }
-                    if !remainder.isEmpty { continuation.yield(remainder) }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: PostgresError.from(error))
@@ -88,100 +50,70 @@ public struct PostgresBulkCopy: @unchecked Sendable {
         }
     }
 
-    /// Run `COPY table [(columns)] FROM STDIN` in CSV or text format, streaming `source` to the server
-    /// over the COPY protocol. The load is one statement: either every row is stored or none is.
-    ///
-    /// CSV input is parsed client-side (RFC 4180, including quoted multi-line fields) and re-encoded
-    /// as COPY text; text input is passed through unchanged; binary input is decoded with the target
-    /// columns' types and re-encoded as COPY text (PostgresNIO sends COPY data in text format only).
+    /// Runs `COPY table [(columns)] FROM STDIN` (any format), streaming `source` to the server. The
+    /// load is one statement: either every row is stored or none is.
     public func copyIn<S: AsyncSequence>(sql: String, source: S) async throws where S.Element == Data {
         let parsed = try CopyStatement.parse(sql: sql)
-        guard parsed.direction == .in, let table = parsed.table else {
+        guard parsed.direction == .in, parsed.table != nil else {
             throw PostgresKitError.notSupported("Expected COPY table FROM STDIN")
         }
-        let chunkSize = max(16 * 1024, options.chunkSizeBytes)
-        let logger = self.logger
-        let columnOIDs = parsed.format == .binary ? try await targetColumnOIDs(parsed) : []
-
         do {
-            try await client.wire.withConnection { connection in
-                switch parsed.format {
-                case .text:
-                    guard let delimiter = parsed.delimiter.unicodeScalars.first, parsed.delimiter.unicodeScalars.count == 1 else {
-                        throw PostgresKitError.notSupported("COPY delimiter must be a single character")
-                    }
-                    guard parsed.nullString == nil || parsed.nullString == "\\N", !parsed.header else {
-                        throw PostgresKitError.notSupported("Text-format COPY supports only the default NULL string and no HEADER")
-                    }
-                    try await connection.copyFrom(schema: parsed.schema, table: table, columns: parsed.columns, delimiter: delimiter == "\t" ? nil : delimiter, logger: logger) { writer in
-                        for try await chunk in source where !chunk.isEmpty {
-                            try await writer.write(ByteBuffer(bytes: chunk))
-                        }
-                    }
-                case .binary:
-                    var converter = BinaryCopyToTextConverter(oids: columnOIDs)
-                    try await connection.copyFrom(schema: parsed.schema, table: table, columns: parsed.columns, logger: logger) { writer in
-                        var output: [UInt8] = []
-                        output.reserveCapacity(chunkSize)
-                        for try await chunk in source {
-                            try converter.feed(chunk, into: &output)
-                            if output.count >= chunkSize {
-                                try await writer.write(ByteBuffer(bytes: output))
-                                output.removeAll(keepingCapacity: true)
-                            }
-                        }
-                        try converter.finish()
-                        if !output.isEmpty { try await writer.write(ByteBuffer(bytes: output)) }
-                    }
-                case .csv:
-                    var converter = try CSVToCopyTextConverter(
-                        delimiter: parsed.delimiter,
-                        quote: parsed.quote,
-                        nullString: parsed.nullString ?? options.nullString,
-                        skipHeader: parsed.header
-                    )
-                    try await connection.copyFrom(schema: parsed.schema, table: table, columns: parsed.columns, logger: logger) { writer in
-                        var output: [UInt8] = []
-                        output.reserveCapacity(chunkSize)
-                        for try await chunk in source {
-                            converter.feed(chunk, into: &output)
-                            if output.count >= chunkSize {
-                                try await writer.write(ByteBuffer(bytes: output))
-                                output.removeAll(keepingCapacity: true)
-                            }
-                        }
-                        try converter.finish(into: &output)
-                        if !output.isEmpty { try await writer.write(ByteBuffer(bytes: output)) }
-                    }
-                }
+            try await client.withConnection { connection in
+                try await PostgresBulkCopy.copyIn(sql, on: connection.connection, source: source)
             }
-        } catch let error as PostgresKitError {
-            throw error
         } catch {
             throw PostgresError.from(error)
         }
     }
 
-    /// Type OIDs of the COPY target columns, in COPY order (all non-dropped columns, or the listed ones).
-    private func targetColumnOIDs(_ parsed: CopyStatement) async throws -> [UInt32] {
-        let result = try await client.simpleQueryResult("""
-            SELECT a.attname, a.atttypid::int8
-            FROM pg_attribute a
-            WHERE a.attrelid = \(PostgresQuoting.quoteLiteral(parsed.qualifiedTableName))::regclass
-              AND a.attnum > 0 AND NOT a.attisdropped
-            ORDER BY a.attnum
-            """)
-        var byName: [String: UInt32] = [:]
-        var ordered: [UInt32] = []
-        for row in result.rows {
-            let (name, oid) = try row.decode((String, Int64).self)
-            byName[name] = UInt32(oid)
-            ordered.append(UInt32(oid))
+    /// COPY TO STDOUT on one connection, handing over chunks of about `chunkSize` bytes.
+    static func copyOut(_ sql: String, on connection: PGConnection, chunkSize: Int, yield: (Data) -> Void) async throws {
+        try await connection.send(sql, chunkSize: 1)
+        guard let start = try await connection.nextResult() else { throw PostgresError(message: "COPY returned nothing") }
+        guard start.status == .copyOut else {
+            try? await connection.drain()
+            throw start.error.map { PostgresError(server: $0) } ?? PostgresError(message: "Expected COPY ... TO STDOUT")
         }
-        guard !parsed.columns.isEmpty else { return ordered }
-        return try parsed.columns.map { column in
-            guard let oid = byName[column] else { throw PostgresKitError.notSupported("Column \(column) does not exist in \(parsed.qualifiedTableName)") }
-            return oid
+        var buffer = Data()
+        buffer.reserveCapacity(chunkSize)
+        while let row = try await connection.getCopyData() {
+            buffer.append(row)
+            if buffer.count >= chunkSize {
+                yield(buffer)
+                buffer.removeAll(keepingCapacity: true)
+            }
         }
+        if !buffer.isEmpty { yield(buffer) }
+        try await finish(on: connection)
+    }
+
+    /// COPY FROM STDIN on one connection. A failure while reading `source` aborts the COPY.
+    static func copyIn<S: AsyncSequence>(_ sql: String, on connection: PGConnection, source: S) async throws where S.Element == Data {
+        try await connection.send(sql, chunkSize: 1)
+        guard let start = try await connection.nextResult() else { throw PostgresError(message: "COPY returned nothing") }
+        guard start.status == .copyIn else {
+            try? await connection.drain()
+            throw start.error.map { PostgresError(server: $0) } ?? PostgresError(message: "Expected COPY table FROM STDIN")
+        }
+        do {
+            for try await chunk in source where !chunk.isEmpty {
+                try await connection.putCopyData(chunk)
+            }
+        } catch {
+            try await connection.endCopy(failing: "Echo stopped the import: \(error.localizedDescription)")
+            try? await connection.drain()
+            throw error
+        }
+        try await connection.endCopy()
+        try await finish(on: connection)
+    }
+
+    /// Reads the COPY's final result; its error, if any, throws.
+    private static func finish(on connection: PGConnection) async throws {
+        var failure: PostgresError?
+        while let result = try await connection.nextResult() {
+            if result.status == .error, failure == nil { failure = result.error.map { PostgresError(server: $0) } }
+        }
+        if let failure { throw failure }
     }
 }

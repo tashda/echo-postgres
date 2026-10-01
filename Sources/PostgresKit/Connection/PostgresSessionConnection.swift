@@ -1,8 +1,7 @@
 import Foundation
 import Logging
-import NIOConcurrencyHelpers
-import PostgresNIO
-import PostgresWire
+import PGLibpq
+import Synchronization
 
 /// Transaction state of a ``PostgresSessionConnection``.
 public enum PostgresTransactionStatus: Sendable, Equatable {
@@ -43,13 +42,14 @@ public enum PostgresStatementOutcome: Sendable {
 /// Unlike ``PostgresClient`` (a pool), every call runs on the *same* backend, so `BEGIN … COMMIT`,
 /// `SET`, temporary tables, advisory locks and `LISTEN` behave exactly as in `psql`.
 /// The session:
-/// - tracks the transaction state (``transactionStatus``) from the statements it runs,
+/// - reports the transaction state (``transactionStatus``) as the server reports it after every statement,
 /// - never reconnects silently: when the connection drops, calls fail with
 ///   ``PostgresSessionError/connectionClosed(transactionLost:)`` so the user learns whether open work was lost,
-/// - can cancel the running statement on the server (``cancel()``),
+/// - notices a server that closes the connection while the session is idle,
+/// - can cancel the running statement on the server (``cancel(using:)``),
 /// - sends a keep-alive `SELECT 1` only while idle *outside* a transaction, so it never defeats the
 ///   server's `idle_in_transaction_session_timeout`.
-public final class PostgresSessionConnection: @unchecked Sendable {
+public final class PostgresSessionConnection: Sendable {
     private struct State {
         var transactionStatus: PostgresTransactionStatus = .idle
         var isClosed = false
@@ -58,44 +58,40 @@ public final class PostgresSessionConnection: @unchecked Sendable {
         var statementsInTransaction = 0
         var queriesInFlight = 0
         var lastActivity = Date()
+        var idleWatch: Task<Void, Never>?
+        var keepAlive: Task<Void, Never>?
+        var closeWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
-    private let nioConnection: PostgresNIO.PostgresConnection
-    private let wireConfiguration: PostgresWireConfiguration
+    let pgConnection: PGConnection
+    private let setup: PostgresLibpqSetup
     private let logger: Logger
-    private let state = NIOLockedValueBox(State())
-    private var keepAliveTask: Task<Void, Never>?
+    private let state = Mutex(State())
 
     /// The backend process ID of this session (as in `pg_stat_activity.pid`).
     public let backendPID: Int32
 
     /// The server this session is connected to (relevant with several configured hosts).
-    public var connectedHost: PostgresHost {
-        PostgresHost(host: wireConfiguration.unixSocketPath ?? wireConfiguration.host, port: wireConfiguration.port)
-    }
+    public let connectedHost: PostgresHost
 
-    /// Wrapper for the PostgresKit connection-level helpers (DDL builders, notifications, …).
+    /// Connection-level helpers (DDL builders, …) on this session's backend.
     public let connection: PostgresConnection
 
-    private init(nioConnection: PostgresNIO.PostgresConnection, backendPID: Int32, wireConfiguration: PostgresWireConfiguration, logger: Logger) {
-        self.nioConnection = nioConnection
+    private init(connection: PGConnection, setup: PostgresLibpqSetup, backendPID: Int32, host: PostgresHost, logger: Logger) {
+        pgConnection = connection
+        self.setup = setup
         self.backendPID = backendPID
-        self.wireConfiguration = wireConfiguration
+        connectedHost = host
         self.logger = logger
-        self.connection = PostgresConnection(
-            wireConnection: WireConnection(nioConnection),
-            logger: logger,
-            cache: StatementCache(capacity: 64),
-            serverCache: PreparedServerCache(capacity: 32)
-        )
+        self.connection = PostgresConnection(connection: connection, logger: logger)
     }
 
     deinit {
-        keepAliveTask?.cancel()
-        let connection = nioConnection
-        if !state.withLockedValue({ $0.isClosed }) {
-            Task { try? await connection.close() }
-        }
+        let tasks = state.withLock { ($0.idleWatch, $0.keepAlive) }
+        tasks.0?.cancel()
+        tasks.1?.cancel()
+        let connection = pgConnection
+        Task(name: "postgres-session-close") { await connection.close() }
     }
 
     /// Open a session.
@@ -107,19 +103,17 @@ public final class PostgresSessionConnection: @unchecked Sendable {
         logger: Logger = .init(label: "postgres-kit.session")
     ) async throws -> PostgresSessionConnection {
         do {
-            let opened = try await PostgresWireClient.openSelectedConnection(configuration: configuration.makeWireConfiguration(), logger: logger)
-            let nioConnection = opened.connection
-            // Keep the resolved configuration: cancels must go to the same host with the same TLS mode.
-            let wireConfiguration = opened.configuration
-            let pid: Int32
-            do {
-                pid = try await Self.queryBackendPID(nioConnection, logger: logger)
-            } catch {
-                try? await nioConnection.close()
-                throw error
-            }
-            let session = PostgresSessionConnection(nioConnection: nioConnection, backendPID: pid, wireConfiguration: wireConfiguration, logger: logger)
-            session.watchForClose()
+            let password = try await PostgresPool.password(for: configuration)
+            let setup = try await configuration.libpqSetup(password: password)
+            let connection = try await PGConnection.connect(setup.parameters, timeout: .seconds(max(2, configuration.connectTimeout)))
+            let host = PostgresHost(
+                host: await connection.host ?? configuration.host,
+                port: await connection.port.flatMap(Int.init) ?? configuration.port
+            )
+            let session = PostgresSessionConnection(
+                connection: connection, setup: setup, backendPID: await connection.backendPID, host: host, logger: logger
+            )
+            session.watchWhileIdle()
             if let keepAliveInterval { session.startKeepAlive(every: keepAliveInterval) }
             return session
         } catch {
@@ -129,84 +123,44 @@ public final class PostgresSessionConnection: @unchecked Sendable {
 
     // MARK: - State
 
-    /// Transaction state as tracked from the statements run on this session.
-    ///
-    /// Statements that manage transactions internally (a procedure that commits) are not visible here;
-    /// use ``refreshTransactionStatus()`` when an exact answer matters.
-    public var transactionStatus: PostgresTransactionStatus { state.withLockedValue { $0.transactionStatus } }
+    /// Transaction state, as the server reported it after the last statement (procedures that
+    /// commit inside are reflected too).
+    public var transactionStatus: PostgresTransactionStatus { state.withLock { $0.transactionStatus } }
 
     /// Whether the connection is closed (by ``close()``, the server, or the network).
-    public var isClosed: Bool { state.withLockedValue { $0.isClosed } }
+    public var isClosed: Bool { state.withLock { $0.isClosed } }
 
     /// Whether a statement is currently running (its rows have not been fully consumed).
-    public var isQueryInFlight: Bool { state.withLockedValue { $0.queriesInFlight > 0 } }
+    public var isQueryInFlight: Bool { state.withLock { $0.queriesInFlight > 0 } }
 
     /// Whether the connection closed while a transaction was open (the server rolled it back).
-    public var transactionWasLost: Bool { state.withLockedValue { $0.isClosed && $0.transactionLost } }
+    public var transactionWasLost: Bool { state.withLock { $0.isClosed && $0.transactionLost } }
 
     /// When the open transaction began (its `BEGIN` finished), `nil` outside a transaction.
-    public var transactionStartedAt: Date? { state.withLockedValue { $0.transactionStartedAt } }
+    public var transactionStartedAt: Date? { state.withLock { $0.transactionStartedAt } }
 
     /// Statements that succeeded inside the open transaction, not counting `BEGIN` (for a close
     /// prompt: "open for 12 minutes, 3 statements").
-    public var statementsInTransaction: Int { state.withLockedValue { $0.statementsInTransaction } }
+    public var statementsInTransaction: Int { state.withLock { $0.statementsInTransaction } }
 
     // MARK: - Queries
 
-    /// Run one statement and stream its rows.
+    /// Run SQL and stream its rows (with several statements, the last result set's).
     public func query(_ sql: String) async throws -> PostgresSessionRows {
-        try await query(WireQuery(sql: sql))
+        try await startStatement { try await $0.send(sql) }
     }
 
     /// Run one statement with bind parameters (`$1`, `$2`, …) and stream its rows.
-    public func query(_ sql: String, binds: [PGData]) async throws -> PostgresSessionRows {
-        var bindings = PGBindings()
-        for bind in binds { bindings.append(bind) }
-        return try await query(WireQuery(sql: sql, binds: bindings))
-    }
-
-    private func query(_ query: WireQuery, allowFallback: Bool = true) async throws -> PostgresSessionRows {
-        let effect = PostgresSQLSplitter.transactionEffect(of: query.sql)
-        let canFallBack = allowFallback && query.binds == nil && transactionStatus == .idle
-        try beginQuery()
-        let token = QueryToken(session: self, effect: effect)
-        do {
-            let rows = try await nioConnection.query(query.asPostgresQuery(), logger: logger)
-            let sql = query.sql
-            let fallback: PostgresSessionRows.Fallback? = canFallBack
-                ? { @Sendable [weak self] error in await self?.textFallbackRows(for: sql, after: error) }
-                : nil
-            return PostgresSessionRows(base: rows, token: token, fallback: fallback)
-        } catch {
-            token.finish(error: error)
-            if canFallBack, let rows = await textFallbackRows(for: query.sql, after: error) { return rows }
-            throw mapError(error)
-        }
-    }
-
-    /// Rows of the text-cast rewrite when `error` is "no binary output function" (see `+TextFallback`).
-    fileprivate func textFallbackRows(for sql: String, after error: any Error) async -> PostgresSessionRows? {
-        guard Self.isMissingBinaryOutput(error), let rewritten = try? await textFallbackSQL(for: sql) else { return nil }
-        return try? await query(WireQuery(sql: rewritten), allowFallback: false)
+    public func query(_ sql: String, binds: [PostgresBind]) async throws -> PostgresSessionRows {
+        try await startStatement { try await $0.send(sql, parameters: binds.map(\.parameter)) }
     }
 
     /// Run one statement and collect all rows plus the command tag (`UPDATE 3`, `CREATE TABLE`, …).
-    public func queryResult(_ sql: String) async throws -> WireQueryResult {
-        let effect = PostgresSQLSplitter.transactionEffect(of: sql)
-        let canFallBack = transactionStatus == .idle
-        try beginQuery()
-        let token = QueryToken(session: self, effect: effect)
-        do {
-            let result = try await nioConnection.query(PostgresQuery(unsafeSQL: sql), logger: logger).get()
-            token.finish(error: nil)
-            return result
-        } catch {
-            token.finish(error: error)
-            if canFallBack, Self.isMissingBinaryOutput(error), let rewritten = try? await textFallbackSQL(for: sql) {
-                return try await queryResult(rewritten)
-            }
-            throw mapError(error)
-        }
+    public func queryResult(_ sql: String) async throws -> PostgresQueryResult {
+        let rows = try await query(sql)
+        var collected: [PostgresRow] = []
+        for try await row in rows { collected.append(row) }
+        return PostgresQueryResult(metadata: PostgresQueryMetadata(tag: rows.stream.commandTag ?? ""), rows: collected)
     }
 
     /// Run one statement, streaming row-returning statements and collecting the command tag for the rest.
@@ -234,67 +188,28 @@ public final class PostgresSessionConnection: @unchecked Sendable {
         }
     }
 
-    /// Ask the server for the exact transaction state (two round trips, no side effects).
-    ///
-    /// Sets a transaction-local placeholder setting and reads it back in a second statement: inside a
-    /// transaction block the value survives to the next statement, in autocommit it does not, and in a
-    /// failed transaction the first statement is rejected with SQLSTATE `25P02`.
+    /// The exact transaction state, as the server reported it after the last statement (no round trip).
     @discardableResult
     public func refreshTransactionStatus() async throws -> PostgresTransactionStatus {
-        let token = UUID().uuidString
-        let status: PostgresTransactionStatus
-        do {
-            _ = try await probeQuery("SELECT set_config('postgres_wire.transaction_probe', '\(token)', true)")
-            let result = try await probeQuery("SELECT current_setting('postgres_wire.transaction_probe', true)")
-            let value = try result.rows.first?.decode(String?.self) ?? nil
-            status = value == token ? .inTransaction : .idle
-        } catch let error as PostgresError where error.sqlState == "25P02" {
-            status = .failed
-        }
-        state.withLockedValue { state in
-            state.transactionStatus = status
-            if status == .idle {
-                state.transactionStartedAt = nil
-                state.statementsInTransaction = 0
-            } else if state.transactionStartedAt == nil {
-                state.transactionStartedAt = Date()
-            }
-        }
+        try throwIfClosed()
+        let status = Self.status(await pgConnection.transactionStatus) ?? transactionStatus
+        state.withLock { Self.apply(status, statementSucceeded: false, to: &$0) }
         return status
-    }
-
-    /// Runs a statement without letting its outcome change the tracked transaction state.
-    func probeQuery(_ sql: String) async throws -> WireQueryResult {
-        try beginQuery()
-        defer { state.withLockedValue { $0.queriesInFlight = max(0, $0.queriesInFlight - 1) } }
-        do {
-            return try await nioConnection.query(PostgresQuery(unsafeSQL: sql), logger: logger).get()
-        } catch {
-            throw mapError(error)
-        }
     }
 
     // MARK: - Cancel and timeouts
 
-    /// Cancel the statement this session is running (`pg_cancel_backend`), sent over a short-lived
-    /// side connection so it works while this one is busy. The statement fails with SQLSTATE `57014`.
+    /// Cancel the statement this session is running. libpq sends the cancel request over its own
+    /// short connection to the same server; the statement then fails with SQLSTATE `57014`.
     ///
-    /// - Parameter client: A pool to send the cancel through instead of opening a side connection.
-    /// - Returns: `false` if nothing was running or the server did not signal the backend.
+    /// - Parameter client: Ignored (kept for callers that passed a pool before).
+    /// - Returns: `false` if nothing was running.
     @discardableResult
     public func cancel(using client: PostgresClient? = nil) async throws -> Bool {
         guard isQueryInFlight, !isClosed else { return false }
         do {
-            if let client {
-                return try await client.cancelBackend(pid: backendPID)
-            }
-            let side = try await PostgresWireClient.openConnection(configuration: wireConfiguration, logger: logger)
-            defer { Task { try? await side.close() } }
-            var binds = PostgresBindings()
-            binds.append(backendPID)
-            let rows = try await side.query(PostgresQuery(unsafeSQL: "SELECT pg_cancel_backend($1)", binds: binds), logger: logger)
-            for try await signalled in rows.decode(Bool.self) { return signalled }
-            return false
+            try await pgConnection.cancel()
+            return true
         } catch {
             throw PostgresError.from(error)
         }
@@ -322,100 +237,159 @@ public final class PostgresSessionConnection: @unchecked Sendable {
 
     /// Close the connection. An open transaction is rolled back by the server.
     public func close() async {
-        keepAliveTask?.cancel()
-        state.withLockedValue { $0.isClosed = true }
-        try? await nioConnection.close()
+        let tasks = state.withLock { state -> (Task<Void, Never>?, Task<Void, Never>?) in
+            state.isClosed = true
+            return (state.idleWatch, state.keepAlive)
+        }
+        tasks.0?.cancel()
+        tasks.1?.cancel()
+        await pgConnection.close()
+        markClosed(lost: false)
     }
 
     /// Suspend until the connection closes.
     public func waitForClose() async {
-        _ = try? await nioConnection.closeFuture.get()
+        await withCheckedContinuation { continuation in
+            let closed = state.withLock { state -> Bool in
+                if state.isClosed { return true }
+                state.closeWaiters.append(continuation)
+                return false
+            }
+            if closed { continuation.resume() }
+        }
     }
 
     // MARK: - Internals
 
-    private func beginQuery() throws {
-        try state.withLockedValue { state in
-            if state.isClosed { throw PostgresSessionError.connectionClosed(transactionLost: state.transactionLost) }
+    /// Stops the idle watch, reads away anything left from an abandoned statement, sends, and
+    /// returns the rows; finishing them updates the transaction state and restarts the watch.
+    private func startStatement(_ send: (PGConnection) async throws -> Void) async throws -> PostgresSessionRows {
+        try throwIfClosed()
+        await stopIdleWatch()
+        state.withLock { state in
             state.queriesInFlight += 1
             state.lastActivity = Date()
         }
+        do {
+            if await pgConnection.isBusy {
+                await PostgresResultStream.finishAbandoned(pgConnection)
+            }
+            try await send(pgConnection)
+        } catch {
+            let mapped = await finishStatement(error: error)
+            throw mapped
+        }
+        let stream = PostgresResultStream(connection: pgConnection, mapError: { $0 }) { [weak self] _, error, _ in
+            _ = await self?.finishStatement(error: error)
+        }
+        return PostgresSessionRows(stream: stream, session: self)
     }
 
-    /// Called exactly once per query when it completes, fails or its rows are abandoned.
-    fileprivate func queryFinished(effect: PostgresTransactionEffect, error: (any Error)?) {
-        state.withLockedValue { state in
+    /// Called once per statement: reads the transaction state from the server, maps the error.
+    @discardableResult
+    fileprivate func finishStatement(error: (any Error)?) async -> any Error {
+        let mapped = error.map { PostgresError.from($0) }
+        let connectionLost = await !pgConnection.isOpen || (mapped?.isConnectionLost ?? false)
+        let status = Self.status(await pgConnection.transactionStatus)
+        state.withLock { state in
             state.queriesInFlight = max(0, state.queriesInFlight - 1)
             state.lastActivity = Date()
-            guard !state.isClosed else { return }
-            if error == nil {
-                switch effect {
-                case .begin, .chain:
-                    state.transactionStatus = .inTransaction
-                    state.transactionStartedAt = Date()
-                    state.statementsInTransaction = 0
-                case .rollbackToSavepoint: state.transactionStatus = .inTransaction
-                case .end: state.transactionStatus = .idle
-                case .none: if state.transactionStatus != .idle { state.statementsInTransaction += 1 }
-                }
-            } else if effect == .end {
-                // A failed COMMIT still ends the transaction block (it is rolled back).
-                state.transactionStatus = .idle
-            } else if state.transactionStatus != .idle {
-                state.transactionStatus = .failed
-            }
-            if state.transactionStatus == .idle {
-                state.transactionStartedAt = nil
+            if let status, !connectionLost { Self.apply(status, statementSucceeded: error == nil, to: &state) }
+        }
+        if connectionLost {
+            let lost = state.withLock { $0.transactionStatus != .idle }
+            markClosed(lost: lost)
+            return PostgresSessionError.connectionClosed(transactionLost: lost)
+        }
+        if !isQueryInFlight { watchWhileIdle() }
+        return mapped ?? PostgresError(message: "")
+    }
+
+    private static func status(_ status: PGConnection.TransactionStatus) -> PostgresTransactionStatus? {
+        switch status {
+        case .idle: .idle
+        case .inTransaction: .inTransaction
+        case .failedTransaction: .failed
+        case .active, .unknown: nil
+        }
+    }
+
+    private static func apply(_ status: PostgresTransactionStatus, statementSucceeded: Bool, to state: inout State) {
+        let wasIdle = state.transactionStatus == .idle
+        state.transactionStatus = status
+        switch status {
+        case .idle:
+            state.transactionStartedAt = nil
+            state.statementsInTransaction = 0
+        case .inTransaction, .failed:
+            if wasIdle {
+                state.transactionStartedAt = Date()
                 state.statementsInTransaction = 0
+            } else if statementSucceeded, status == .inTransaction {
+                state.statementsInTransaction += 1
             }
         }
     }
 
-    private func mapError(_ error: any Error) -> any Error {
-        let lost = state.withLockedValue { state -> Bool? in state.isClosed ? state.transactionLost : nil }
-        if let lost { return PostgresSessionError.connectionClosed(transactionLost: lost) }
-        let mapped = PostgresError.from(error)
-        if Self.isMissingBinaryOutput(mapped), mapped.hint == nil {
-            return mapped.withHint(Self.binaryOutputHint)
-        }
-        return mapped
+    private func throwIfClosed() throws {
+        let closed = state.withLock { state -> Bool? in state.isClosed ? state.transactionLost : nil }
+        if let lost = closed { throw PostgresSessionError.connectionClosed(transactionLost: lost) }
     }
 
-    fileprivate func mapIterationError(_ error: any Error) -> any Error {
-        mapError(error)
+    private func markClosed(lost: Bool) {
+        let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            if !state.isClosed || lost { state.transactionLost = state.transactionLost || lost }
+            state.isClosed = true
+            state.keepAlive?.cancel()
+            defer { state.closeWaiters.removeAll() }
+            return state.closeWaiters
+        }
+        if lost { logger.warning("Session connection \(backendPID) closed with an open transaction") }
+        waiters.forEach { $0.resume() }
     }
 
-    private func watchForClose() {
-        nioConnection.closeFuture.whenComplete { [weak self] _ in
-            guard let self else { return }
-            let lost = self.state.withLockedValue { state -> Bool in
-                if !state.isClosed, state.transactionStatus != .idle { state.transactionLost = true }
-                state.isClosed = true
-                return state.transactionLost
-            }
-            if lost { self.logger.warning("Session connection \(self.backendPID) closed with an open transaction") }
-            self.keepAliveTask?.cancel()
+    /// While idle, waits on the socket so a server that closes the connection is noticed now,
+    /// not at the next statement.
+    private func watchWhileIdle() {
+        let connection = pgConnection
+        let task = Task(name: "postgres-session-idle-watch") { [weak self] in
+            do {
+                while !Task.isCancelled { _ = try await connection.waitWhileIdle() }
+            } catch let error as PGConnectionError where error.kind == .connectionLost {
+                guard let self else { return }
+                let lost = self.state.withLock { $0.transactionStatus != .idle }
+                self.markClosed(lost: lost)
+            } catch {}
         }
+        let previous = state.withLock { state -> Task<Void, Never>? in
+            defer { state.idleWatch = task }
+            return state.idleWatch
+        }
+        previous?.cancel()
+    }
+
+    private func stopIdleWatch() async {
+        let watch = state.withLock { state -> Task<Void, Never>? in
+            defer { state.idleWatch = nil }
+            return state.idleWatch
+        }
+        watch?.cancel()
+        await watch?.value
     }
 
     private func startKeepAlive(every interval: Duration) {
-        keepAliveTask = Task { [weak self] in
+        let task = Task(name: "postgres-session-keepalive") { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)
                 guard let self, !Task.isCancelled else { return }
-                let due = self.state.withLockedValue { state in
+                let due = self.state.withLock { state in
                     !state.isClosed && state.queriesInFlight == 0 && state.transactionStatus == .idle
                         && Date().timeIntervalSince(state.lastActivity) >= Double(interval.components.seconds)
                 }
                 if due { _ = try? await self.queryResult("SELECT 1") }
             }
         }
-    }
-
-    private static func queryBackendPID(_ connection: PostgresNIO.PostgresConnection, logger: Logger) async throws -> Int32 {
-        let rows = try await connection.query("SELECT pg_backend_pid()", logger: logger)
-        for try await pid in rows.decode(Int32.self) { return pid }
-        throw PostgresError(message: "Could not read the backend process ID")
+        state.withLock { $0.keepAlive = task }
     }
 }
 
@@ -429,49 +403,18 @@ public struct PostgresScriptError: Error, LocalizedError, @unchecked Sendable {
     }
 }
 
-/// Tracks one in-flight query; reports completion to the session exactly once.
-final class QueryToken: @unchecked Sendable {
-    private weak var session: PostgresSessionConnection?
-    private let effect: PostgresTransactionEffect
-    private let finished = NIOLockedValueBox(false)
-
-    init(session: PostgresSessionConnection, effect: PostgresTransactionEffect) {
-        self.session = session
-        self.effect = effect
-    }
-
-    func finish(error: (any Error)?) {
-        let first = finished.withLockedValue { done -> Bool in
-            defer { done = true }
-            return !done
-        }
-        if first { session?.queryFinished(effect: effect, error: error) }
-    }
-
-    func mapError(_ error: any Error) -> any Error {
-        session?.mapIterationError(error) ?? error
-    }
-
-    deinit {
-        // Rows abandoned without being consumed: the statement is no longer tracked as running.
-        finish(error: nil)
-    }
-}
-
 /// Rows of one statement on a ``PostgresSessionConnection``.
 ///
 /// Iterate to the end (or drop the sequence) before the session's next statement; errors thrown while
-/// iterating update the session's transaction state.
+/// iterating are the session's (``PostgresSessionError/connectionClosed(transactionLost:)`` when the
+/// connection broke).
 public struct PostgresSessionRows: AsyncSequence, Sendable {
     public typealias Element = PostgresRow
-    typealias Fallback = @Sendable (any Error) async -> PostgresSessionRows?
-
-    let base: WireRowSequence
-    let token: QueryToken
-    var fallback: Fallback? = nil
+    let stream: PostgresResultStream
+    let session: PostgresSessionConnection
 
     public func makeAsyncIterator() -> AsyncIterator {
-        AsyncIterator(base: base.makeAsyncIterator(), token: token, fallback: fallback)
+        AsyncIterator(base: PostgresRows(stream: stream).makeAsyncIterator(), session: session)
     }
 
     /// Collect all rows into memory.
@@ -481,34 +424,40 @@ public struct PostgresSessionRows: AsyncSequence, Sendable {
         return rows
     }
 
+    /// The column names and types, as soon as the server described them (also with no rows).
+    public func columns() async throws -> [PostgresColumn] {
+        do { return try await stream.columns() } catch { throw await session.finishStatementError(error) }
+    }
+
+    /// The results as libpq delivers them, for a reader that handles whole chunks (the result
+    /// grid's spool). Don't mix with row iteration.
+    public var chunks: PostgresChunks { PostgresChunks(stream: stream) }
+
+    /// The command tag once the rows have been read (`SELECT 3`).
+    public var commandTag: String? { stream.commandTag }
+
     public struct AsyncIterator: AsyncIteratorProtocol {
-        var base: WireRowSequence.AsyncIterator
-        var token: QueryToken
-        var fallback: Fallback?
-        var yieldedRow = false
+        var base: PostgresRows.AsyncIterator
+        let session: PostgresSessionConnection
 
         public mutating func next() async throws -> PostgresRow? {
             do {
-                guard let row = try await base.next() else {
-                    token.finish(error: nil)
-                    return nil
-                }
-                yieldedRow = true
-                return row
+                return try await base.next()
             } catch {
-                token.finish(error: error)
-                let reported = token.mapError(error)
-                // "No binary output function" arrives before the first row: retry with text casts.
-                if !yieldedRow, let fallback {
-                    self.fallback = nil
-                    if let rows = await fallback(error) {
-                        base = rows.base.makeAsyncIterator()
-                        token = rows.token
-                        return try await next()
-                    }
-                }
-                throw reported
+                throw await session.finishStatementError(error)
             }
         }
+    }
+}
+
+extension PostgresSessionConnection {
+    /// The error a reader sees: a lost connection becomes ``PostgresSessionError/connectionClosed(transactionLost:)``.
+    fileprivate func finishStatementError(_ error: any Error) async -> any Error {
+        if isClosed { return PostgresSessionError.connectionClosed(transactionLost: transactionWasLost) }
+        let mapped = PostgresError.from(error)
+        if mapped.isConnectionLost {
+            return PostgresSessionError.connectionClosed(transactionLost: transactionWasLost)
+        }
+        return mapped
     }
 }

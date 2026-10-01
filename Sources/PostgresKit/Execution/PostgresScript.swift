@@ -1,5 +1,4 @@
 import Foundation
-import PostgresWire
 
 /// One step of a SQL script as psql would run it.
 public enum PostgresScriptStep: Sendable, Equatable {

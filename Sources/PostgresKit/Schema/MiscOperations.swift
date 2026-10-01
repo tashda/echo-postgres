@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// DDL operations for aggregates, operators, languages, casts, and backup utilities.
 public extension PostgresAdminClient {

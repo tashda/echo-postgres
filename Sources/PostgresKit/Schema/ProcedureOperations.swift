@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Procedures (PostgreSQL 11+): `CREATE PROCEDURE`, run with `CALL`.
 public extension PostgresRoutineClient {

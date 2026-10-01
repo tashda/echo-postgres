@@ -1,6 +1,5 @@
 import Foundation
 import Logging
-import PostgresWire
 
 // MARK: - Core Namespace Client Types
 
@@ -24,15 +23,15 @@ public struct PostgresActivityClient: Sendable {
     init(client: PostgresClient) { self.client = client }
 
     public func snapshot(options: PostgresActivityOptions = .init()) async throws -> PostgresActivitySnapshot {
-        try await client.wire.activity.snapshot(options: options)
+        try await client.activityMonitor.snapshot(options: options)
     }
 
     public func streamSnapshots(every seconds: TimeInterval = 5.0, options: PostgresActivityOptions = .init()) -> AsyncThrowingStream<PostgresActivitySnapshot, Error> {
-        client.wire.activity.streamSnapshots(every: seconds, options: options)
+        client.activityMonitor.streamSnapshots(every: seconds, options: options)
     }
 
     public func killSession(pid: Int32) async throws {
-        try await client.wire.activity.killSession(pid: pid)
+        try await client.activityMonitor.killSession(pid: pid)
     }
 }
 

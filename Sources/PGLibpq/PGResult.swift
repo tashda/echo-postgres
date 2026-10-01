@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 /// One `PGresult` (a chunk of rows, a command's completion, or an error), freed with it.
 ///
 /// `@unchecked Sendable` (owner decision D25, the only one allowed): libpq documents a `PGresult` as

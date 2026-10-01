@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Dispatch
 
 /// One libpq connection.
@@ -13,6 +23,7 @@ public actor PGConnection {
     /// Notices (RAISE NOTICE, warnings) since the last `takeNotices()`.
     let noticeBox = PGNoticeBox()
     private var noticeContext: Unmanaged<PGNoticeBox>?
+    var pendingNotifications: [PGNotification] = []
     /// A statement was sent and its results haven't all been read.
     public internal(set) var isBusy = false
 

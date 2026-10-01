@@ -57,7 +57,7 @@ final class BasicTests: PostgresKitTestCase {
 
     func testParameterizedQuery() async throws {
         let result = try await client.withConnection { conn in
-            try await conn.query("SELECT $1::text as value", binds: [PGData(string: "parameterized")])
+            try await conn.query("SELECT $1::text as value", binds: [PostgresBind.text("parameterized")])
         }
 
         var values: [String] = []
@@ -72,9 +72,9 @@ final class BasicTests: PostgresKitTestCase {
             try await conn.query(
                 "SELECT $1::text as text, $2::integer as number, $3::boolean as bool",
                 binds: [
-                    PGData(string: "test"),
-                    PGData(int32: 123),
-                    PGData(bool: true)
+                    PostgresBind.text("test"),
+                    PostgresBind.int32(123),
+                    PostgresBind.bool(true)
                 ]
             )
         }
@@ -99,12 +99,12 @@ final class BasicTests: PostgresKitTestCase {
                     $5::real as real_field,
                     $6::double precision as double_field
             """, binds: [
-                PGData(string: "test_text"),
-                PGData(int32: 42),
-                PGData(int64: 1234567890),
-                PGData(bool: true),
-                PGData(float: 3.14),
-                PGData(double: 2.718281828459045)
+                PostgresBind.text("test_text"),
+                PostgresBind.int32(42),
+                PostgresBind.int(Int(1234567890)),
+                PostgresBind.bool(true),
+                PostgresBind.double(Double(3.14)),
+                PostgresBind.double(2.718281828459045)
             ])
         }
 
@@ -206,7 +206,7 @@ final class BasicTests: PostgresKitTestCase {
             _ = try await client.simpleQuery("SELECT * FROM nonexistent_table")
             XCTFail("Expected query to fail")
         } catch {
-            XCTAssertTrue(error is PostgresError || error is PostgresKitError || error is PSQLError)
+            XCTAssertTrue(error is PostgresError || error is PostgresKitError)
         }
     }
 
@@ -217,39 +217,11 @@ final class BasicTests: PostgresKitTestCase {
             }
             XCTFail("Expected query to fail")
         } catch {
-            XCTAssertTrue(error is PostgresError || error is PostgresKitError || error is PSQLError)
+            XCTAssertTrue(error is PostgresError || error is PostgresKitError)
         }
     }
 
     // MARK: - Streaming Tests
-
-    func testBasicStreaming() async throws {
-        let result = try await client.streamQuery(
-            "SELECT generate_series(1, 10) as number"
-        ) { _ in
-            // Simple callback that doesn't need to capture mutable state
-        }
-
-        // If we get here without error, streaming worked
-        XCTAssertNotNil(result)
-    }
-
-    func testStreamingWithConfiguration() async throws {
-        let config = PostgresStreamConfiguration {
-            $0.initialPreviewRows = 5
-            $0.streamingFetchSize = 10
-        }
-
-        let result = try await client.streamQuery(
-            "SELECT generate_series(1, 20) as number",
-            configuration: config
-        ) { _ in
-            // Simple callback
-        }
-
-        // If we get here without error, streaming with config worked
-        XCTAssertNotNil(result)
-    }
 
     // MARK: - Connection Management Tests
 
@@ -307,7 +279,7 @@ final class BasicTests: PostgresKitTestCase {
         let specialText = "Special chars: àáâãäåæçèéêë"
 
         let result = try await client.withConnection { conn in
-            try await conn.query("SELECT $1::text as special_text", binds: [PGData(string: specialText)])
+            try await conn.query("SELECT $1::text as special_text", binds: [PostgresBind.text(specialText)])
         }
 
         var retrievedText: String?

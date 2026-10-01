@@ -1,3 +1,13 @@
+#if canImport(CLibpq)
+internal import CLibpq
+#else
+internal import CLibpqSystem
+#endif
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 /// libpq connection keywords and values, passed as arrays (`PQconnectStartParams`), never as a
 /// conninfo string: no quoting rules to get wrong, and the password never sits in a string that
 /// could be logged.

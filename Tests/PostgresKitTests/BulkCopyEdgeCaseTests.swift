@@ -3,36 +3,8 @@ import Logging
 import XCTest
 @testable import PostgresKit
 
-/// CSV → COPY text conversion and statement parsing (no database needed).
+/// COPY statement parsing (no database needed).
 final class CopyParsingTests: XCTestCase {
-    private func convert(_ csv: String, chunkSize: Int = 3, header: Bool = false, nullString: String? = nil) throws -> String {
-        var converter = try CSVToCopyTextConverter(delimiter: ",", quote: "\"", nullString: nullString, skipHeader: header)
-        var output: [UInt8] = []
-        let bytes = Array(csv.utf8)
-        var index = 0
-        while index < bytes.count {
-            converter.feed(bytes[index..<min(index + chunkSize, bytes.count)], into: &output)
-            index += chunkSize
-        }
-        try converter.finish(into: &output)
-        return String(decoding: output, as: UTF8.self)
-    }
-
-    func testQuotedFieldsSpanningLinesAndChunks() throws {
-        let csv = "id,note\r\n1,\"line one\nline two\"\r\n2,\"say \"\"hi\"\", ok\"\n"
-        XCTAssertEqual(try convert(csv, header: true), "1\tline one\\nline two\n2\tsay \"hi\", ok\n")
-    }
-
-    func testNullVersusEmptyString() throws {
-        XCTAssertEqual(try convert("1,,\"\"\n"), "1\t\\N\t\n")
-        XCTAssertEqual(try convert("1,NULL,\"NULL\"\n", nullString: "NULL"), "1\t\\N\tNULL\n")
-    }
-
-    func testEscapesAndMissingFinalNewline() throws {
-        XCTAssertEqual(try convert("a\\b,c\td"), "a\\\\b\tc\\td\n")
-        XCTAssertThrowsError(try convert("1,\"unterminated"))
-    }
-
     func testParsesStatementForms() throws {
         let modern = try CopyStatement.parse(sql: "COPY \"My Schema\".\"Weird\"\"Table\" (a, \"B c\") FROM STDIN WITH (FORMAT csv, HEADER true, NULL 'x');")
         XCTAssertEqual(modern.direction, .in)

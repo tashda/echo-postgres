@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Rule DDL operations.
 public extension PostgresAdminClient {
