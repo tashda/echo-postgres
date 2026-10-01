@@ -182,3 +182,39 @@ struct PGConnectionOfflineTests {
         #expect(changed["password"] == nil)
     }
 }
+
+/// A user's shell environment must not change how a connection behaves (risk R10).
+@Suite("PGConnection and the environment", .labServer, .serialized)
+struct PGConnectionEnvironmentTests {
+    private static let hostile: [String: String] = [
+        "PGSSLMODE": "verify-full",          // would fail against the lab's untrusted certificate
+        "PGGSSENCMODE": "require",           // would fail: no Kerberos
+        "PGAPPNAME": "from-the-shell",
+        "PGOPTIONS": "-c search_path=nowhere",
+        "PGDATESTYLE": "SQL, DMY",
+        "PGCLIENTENCODING": "LATIN1",
+        "PGTARGETSESSIONATTRS": "standby",   // would fail: the lab server is a primary
+        "PGSSLROOTCERT": "/nonexistent/root.crt",
+        "PGPASSFILE": "/nonexistent/pgpass",
+        "PGCONNECT_TIMEOUT": "1",
+    ]
+
+    @Test func environmentVariablesDontApply() async throws {
+        for (name, value) in Self.hostile { setenv(name, value, 1) }
+        defer { for name in Self.hostile.keys { unsetenv(name) } }
+        var parameters = LabServer.parameters
+        parameters.set("sslmode", nil)            // left to the default, not to PGSSLMODE
+        parameters.set("application_name", nil)   // likewise
+        let connection = try await PGConnection.connect(parameters, timeout: .seconds(15))
+        defer { Task { await connection.close() } }
+        let row = try #require(try await connection.execute(
+            "SELECT current_setting('application_name'), current_setting('DateStyle'), current_setting('client_encoding'), current_setting('search_path')"
+        ).first)
+        #expect(row.string(row: 0, column: 0) == "PGLibpq")
+        // The output format is ours (ISO); the date order stays the session's (here PGDATESTYLE's).
+        #expect(row.string(row: 0, column: 1) == "ISO, DMY")
+        #expect(row.string(row: 0, column: 2) == "UTF8")
+        #expect(row.string(row: 0, column: 3)?.contains("nowhere") == false)
+        #expect(await connection.encryption != .kerberos)
+    }
+}
