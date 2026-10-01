@@ -1,7 +1,8 @@
 /// One `PGresult` (a chunk of rows, a command's completion, or an error), freed with it.
 ///
-/// `@unchecked Sendable`: libpq documents a `PGresult` as read-only once returned ("can be passed
-/// around freely between threads"), and nothing here mutates it. Cell bytes stay valid for as long
+/// `@unchecked Sendable` (owner decision D25, the only one allowed): libpq documents a `PGresult` as
+/// read-only once returned ("can be passed around freely between threads"), and nothing here
+/// mutates it. Cell bytes stay valid for as long
 /// as this object lives.
 public final class PGResult: @unchecked Sendable {
     let pointer: OpaquePointer
