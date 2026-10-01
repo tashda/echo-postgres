@@ -35,6 +35,9 @@ extension PostgresConfiguration {
         parameters.set("target_session_attrs", targetSessionAttributes.rawValue)
         parameters.set("load_balance_hosts", loadBalanceHosts ? "random" : "disable")
         parameters.set("krbsrvname", kerberosServiceName ?? "postgres")
+        // No service name refuses Kerberos (libpq would otherwise answer a GSSAPI request with the
+        // user's ticket).
+        if kerberosServiceName == nil { parameters.set("require_auth", "!gss") }
         parameters.set("gssencmode", signsInWithKerberos ? "prefer" : "disable")
         parameters.set("sslmode", unixSocketPath == nil ? sslMode.rawValue : "disable")
         #if canImport(EchoTLS)
@@ -113,7 +116,11 @@ extension PostgresConfiguration {
     @concurrent
     static func numericAddress(of host: String) async throws -> String {
         var hints = addrinfo()
+        #if canImport(Glibc)
+        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        #else
         hints.ai_socktype = SOCK_STREAM
+        #endif
         var list: UnsafeMutablePointer<addrinfo>?
         let status = getaddrinfo(host, nil, &hints, &list)
         guard status == 0, let first = list else {

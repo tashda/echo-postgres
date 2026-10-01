@@ -98,6 +98,8 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
         #endif
         case let error as PostgresKerberosError:
             return PostgresError(message: error.message, serverInfo: ["detail": error.details], connectionProblem: .kerberos(error), isConnectionError: true)
+        case let error as PostgresTLSFileError:
+            return PostgresError(message: error.message, connectionProblem: .clientCertificate(error), isConnectionError: true)
         default: return PostgresError(message: error.localizedDescription)
         }
     }
@@ -105,7 +107,7 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
     /// Like ``from(_:)`` for the driver's own errors; any other error is returned unchanged.
     internal static func fromDriver(_ error: any Error) -> any Error {
         switch error {
-        case is PGServerError, is PGConnectionError, is PostgresKerberosError: return from(error)
+        case is PGServerError, is PGConnectionError, is PostgresKerberosError, is PostgresTLSFileError: return from(error)
         #if canImport(EchoTLS)
         case is ClientCertificateError: return from(error)
         #endif

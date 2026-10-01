@@ -17,6 +17,9 @@ enum PostgresConnectionMessages {
         case .connectFailed, .sendFailed:
             break
         }
+        if text.contains("requirement \"!gss\" failed") {
+            return ("The server asks for Kerberos, which is turned off for this connection.", nil)
+        }
         if let kerberos = kerberosError(text, original: error.message) {
             return (kerberos.message, .kerberos(kerberos))
         }
@@ -81,7 +84,8 @@ enum PostgresConnectionMessages {
             kind = .noTicket
         } else if text.contains("expired") {
             kind = .expired
-        } else if text.contains("server not found in kerberos database") || text.contains("unknown server") {
+        } else if text.contains("server not found in kerberos database") || text.contains("unknown server")
+                    || (text.contains("server (") && text.contains(") unknown while looking up")) { // MIT, Heimdal (Apple GSS)
             kind = .unknownService
         } else if text.contains("clock skew") {
             kind = .clockSkew

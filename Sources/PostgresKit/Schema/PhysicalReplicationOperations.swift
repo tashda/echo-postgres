@@ -33,7 +33,13 @@ public extension PostgresMetadataClient {
     /// Standbys connected to this primary.
     func listStandbys() async throws -> [PostgresStandbyInfo] {
         let rows = try await client.simpleQuery(
-            "SELECT application_name::text, client_addr::text, state::text, sync_state::text FROM pg_stat_replication ORDER BY application_name"
+            // Logical subscribers also appear in pg_stat_replication; they hold a logical slot.
+            """
+            SELECT r.application_name::text, r.client_addr::text, r.state::text, r.sync_state::text
+            FROM pg_stat_replication r
+            WHERE NOT EXISTS (SELECT 1 FROM pg_replication_slots s WHERE s.active_pid = r.pid AND s.slot_type = 'logical')
+            ORDER BY r.application_name
+            """
         )
         var standbys: [PostgresStandbyInfo] = []
         for try await (name, address, state, sync) in rows.decode((String, String?, String?, String?).self) {
