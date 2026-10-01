@@ -29,6 +29,9 @@ actor PostgresPool {
     private var isClosed = false
     private(set) var currentHost: PostgresHost
     private var hasConnected = false
+    /// A connection to `currentHost` was found closed; the next connect explains a move or a
+    /// failure as the server being unreachable.
+    private var lostCurrentHost = false
     private var hostObservers: [UUID: AsyncStream<PostgresHostChange>.Continuation] = [:]
 
     /// An idle connection unused this long is checked with an empty query before it is leased.
@@ -57,6 +60,7 @@ actor PostgresPool {
                 if alive, ContinuousClock.now - entry.since < Self.checkAfterIdle { return entry.lease }
                 if alive, await Self.isHealthy(entry.lease.connection) { return entry.lease }
                 leased -= 1
+                if !alive { lostCurrentHost = true }
                 await entry.lease.connection.close()
                 continue
             }
@@ -107,10 +111,27 @@ actor PostgresPool {
             let setup = try await configuration.libpqSetup(password: password)
             let connection = try await PGConnection.connect(setup.parameters, timeout: .seconds(max(2, configuration.connectTimeout)))
             await noteHost(of: connection)
+            lostCurrentHost = false
             return PostgresLease(connection: connection, setup: setup, openedAt: .now)
         } catch {
+            // The server the pool was using went away and none can be reached now: say so, rather
+            // than libpq's first-connect wording.
+            if hasConnected, let reason = Self.unreachableReason(error) {
+                throw PostgresServerUnreachableError(host: currentHost.host, port: currentHost.port, reason: reason)
+            }
             throw configuration.connectError(error)
         }
+    }
+
+    /// libpq's text when a connect failed because the server can't be reached (refused, timed out,
+    /// no route), not because it refused the sign-in.
+    static func unreachableReason(_ error: any Error) -> String? {
+        guard let error = error as? PGConnectionError else { return nil }
+        let text = error.message.lowercased()
+        let network = ["connection refused", "timeout expired", "timed out", "network is unreachable", "no route to host",
+                       "host is down", "server closed the connection", "connection reset"]
+        guard error.kind == .connectTimedOut || network.contains(where: text.contains) else { return nil }
+        return PostgresConnectionMessages.firstLine(of: error.message, droppingPrefix: true)
     }
 
     static func password(for configuration: PostgresConfiguration) async throws -> String? {
@@ -141,7 +162,10 @@ actor PostgresPool {
         currentHost = reached
         // The first connection only learns where the pool is; later differences are failovers.
         guard hasConnected else { hasConnected = true; return }
-        let change = PostgresHostChange(from: previous, to: reached, reason: "The server at \(previous.host):\(previous.port) could not be used.", date: Date())
+        let reason = lostCurrentHost
+            ? "Can't reach the server at \(previous.host):\(previous.port) any more: it may have stopped, or the network is down."
+            : "The server at \(previous.host):\(previous.port) could not be used."
+        let change = PostgresHostChange(from: previous, to: reached, reason: reason, date: Date())
         logger.notice("Postgres pool moved from \(previous.host):\(previous.port) to \(reached.host):\(reached.port)")
         for observer in hostObservers.values { observer.yield(change) }
     }
