@@ -9,7 +9,7 @@ let vendoredSwiftSettings: [SwiftSetting] = [
 
 let package = Package(
     name: "postgres-wire",
-    platforms: [ .macOS(.v13) ],
+    platforms: [ .macOS(.v26) ],
     products: [
         .library(name: "PostgresWire", targets: ["PostgresWire"]),
         .library(name: "PostgresKit", targets: ["PostgresKit"]),
@@ -27,7 +27,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", "3.9.0" ..< "5.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
         .package(url: "https://github.com/apple/swift-metrics.git", from: "2.3.0"),
-        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.5")
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.5"),
+        // libpq (macOS: universal frameworks built by echo-libraries; Linux: the system's libpq).
+        .package(url: "https://github.com/tashda/echo-libraries", from: "1.1.0"),
     ],
     targets: [
         // The copy of PostgresNIO (ThirdParty/postgres-nio/README.md lists what changed).
@@ -65,6 +67,21 @@ let package = Package(
             pkgConfig: "krb5-gssapi",
             providers: [.apt(["libkrb5-dev"]), .yum(["krb5-devel"])]
         ),
+        // The system's libpq on Linux (libpq-dev, PostgreSQL 17+ for chunked rows).
+        .systemLibrary(
+            name: "CLibpqSystem",
+            pkgConfig: "libpq",
+            providers: [.apt(["libpq-dev"]), .yum(["libpq-devel"])]
+        ),
+        // The libpq transport: the only code that calls libpq. Each connection is an actor running
+        // on its own serial queue, woken by socket readiness (no thread ever blocks).
+        .target(
+            name: "PGLibpq",
+            dependencies: [
+                .product(name: "CLibpq", package: "echo-libraries", condition: .when(platforms: [.macOS])),
+                .target(name: "CLibpqSystem", condition: .when(platforms: [.linux])),
+            ]
+        ),
         .target(
             name: "PostgresWire",
             dependencies: [
@@ -86,6 +103,10 @@ let package = Package(
         .target(
             name: "PostgresKitTesting",
             dependencies: ["PostgresKit"]
+        ),
+        .testTarget(
+            name: "PGLibpqTests",
+            dependencies: ["PGLibpq"]
         ),
         .testTarget(
             name: "PostgresWireTests",
