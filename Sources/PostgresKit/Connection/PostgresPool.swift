@@ -108,11 +108,22 @@ actor PostgresPool {
     func open() async throws -> PostgresLease {
         do {
             let password = try await Self.password(for: configuration)
-            let setup = try await configuration.libpqSetup(password: password)
-            let connection = try await PGConnection.connect(setup.parameters, timeout: .seconds(max(2, configuration.connectTimeout)))
-            await noteHost(of: connection)
-            lostCurrentHost = false
-            return PostgresLease(connection: connection, setup: setup, openedAt: .now)
+            do {
+                return try await connect(configuration, password: password)
+            } catch where !configuration.additionalHosts.isEmpty && Self.unreachableReason(error) != nil {
+                // libpq stops at a host that accepts the connection and then closes it (a proxy or
+                // pooler whose server is gone) instead of trying the next; try each host on its own.
+                let hosts = [PostgresHost(host: configuration.host, port: configuration.port)] + configuration.additionalHosts
+                for host in hosts {
+                    var single = configuration
+                    single.host = host.host
+                    single.port = host.port
+                    single.additionalHosts = []
+                    single.loadBalanceHosts = false
+                    if let lease = try? await connect(single, password: password) { return lease }
+                }
+                throw error
+            }
         } catch {
             // The server the pool was using went away and none can be reached now: say so, rather
             // than libpq's first-connect wording.
@@ -121,6 +132,14 @@ actor PostgresPool {
             }
             throw configuration.connectError(error)
         }
+    }
+
+    private func connect(_ configuration: PostgresConfiguration, password: String?) async throws -> PostgresLease {
+        let setup = try await configuration.libpqSetup(password: password)
+        let connection = try await PGConnection.connect(setup.parameters, timeout: .seconds(max(2, configuration.connectTimeout)))
+        await noteHost(of: connection)
+        lostCurrentHost = false
+        return PostgresLease(connection: connection, setup: setup, openedAt: .now)
     }
 
     /// libpq's text when a connect failed because the server can't be reached (refused, timed out,
