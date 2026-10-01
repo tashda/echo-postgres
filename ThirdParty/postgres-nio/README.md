@@ -41,3 +41,19 @@ No empty passwords: a server asking for a cleartext password when none was confi
   fails with `authMechanismRequiresPassword`, as `md5` and SCRAM already did (libpq: "no password
   supplied"), instead of sending an empty password. A Kerberos-only sign-in can then say that the
   server asks for a password.
+
+Prepared statements from `PostgresDatabase.prepare(query:)` decode non-text columns.
+
+- `New/Connection State Machine/ExtendedQueryStateMachine.swift`: `.prepareStatement` hands back the
+  row description with binary formats (the unnamed path already did), because executing the
+  statement binds with binary result formats. Upstream's older `prepare(query:)` / `PreparedQuery`
+  path kept the text formats from Describe, so booleans and integers failed to decode; the newer
+  `PostgresPreparedStatement` path converts in `PreparedStatementStateMachine` and is unaffected.
+  postgres-wire's `queryPreparedRows` uses the older path. Worth offering upstream.
+
+`PostgresClient.isRunning`.
+
+- `Pool/PostgresClient.swift`: a public `isRunning` (reads `runningAtomic`), so postgres-wire, which
+  runs each pool in a detached task, can wait for `run()` to start before the first lease instead
+  of triggering the "run() hasn't been called yet" warning.
+

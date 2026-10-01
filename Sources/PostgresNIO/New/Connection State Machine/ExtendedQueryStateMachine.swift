@@ -267,8 +267,8 @@ struct ExtendedQueryStateMachine {
             return .wait
 
         case .prepareStatement(_, _, _, let eventLoopPromise):
-            // Executing the statement binds with binary result formats, so the description it
-            // keeps must say binary too, or every non-text column is decoded as text.
+            // postgres-wire: executing the statement binds with binary result formats, so the
+            // description it keeps must say binary too, or every non-text column is decoded as text.
             return .succeedPreparedStatementCreation(eventLoopPromise, with: RowDescription(columns: columns))
         }
     }

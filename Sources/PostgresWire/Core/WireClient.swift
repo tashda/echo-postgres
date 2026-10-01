@@ -86,6 +86,22 @@ public final class PostgresWireClient: @unchecked Sendable {
 
     /// The current pool, replaced first when its credential is about to expire.
     func pool() async throws -> PostgresClient {
+        await Self.started(try await currentPool())
+    }
+
+    /// Pools run in a detached task; the first lease waits until `run()` has started instead of
+    /// racing it (PostgresNIO logs "run() hasn't been called yet" then). After that it is one
+    /// atomic load.
+    private static func started(_ client: PostgresClient) async -> PostgresClient {
+        var waits = 0
+        while !client.isRunning, waits < 500 {
+            waits += 1
+            if waits <= 20 { await Task.yield() } else { try? await Task.sleep(for: .milliseconds(1)) }
+        }
+        return client
+    }
+
+    private func currentPool() async throws -> PostgresClient {
         let current = pools.withLockedValue { $0 }
         guard let expiresAt = current.expiresAt, configuration.passwordProvider != nil,
               expiresAt.timeIntervalSinceNow < Self.rotationMargin else {

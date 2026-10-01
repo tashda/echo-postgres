@@ -35,12 +35,15 @@ public extension PostgresConstraintClient {
         return try await client.executeDDL(parts.joined(separator: " "))
     }
 
-    /// Add a unique constraint to a table.
+    /// Add a unique constraint to a table. `nullsDistinct: false` makes rows with NULLs in the same
+    /// columns count as duplicates (`UNIQUE NULLS NOT DISTINCT`, PostgreSQL 15+).
     @discardableResult
-    func addUniqueConstraint(table: String, schema: String? = nil, columns: [String], constraintName: String? = nil) async throws -> Int {
+    func addUniqueConstraint(table: String, schema: String? = nil, columns: [String], constraintName: String? = nil,
+                             nullsDistinct: Bool = true) async throws -> Int {
         let name = constraintName ?? "uq_\(table)_\(columns.joined(separator: "_"))"
         let columnList = columns.map { client.quoteIdentifier($0) }.joined(separator: ", ")
-        let sql = "ALTER TABLE \(client.quoteQualified(table, schema: schema)) ADD CONSTRAINT \(client.quoteIdentifier(name)) UNIQUE (\(columnList))"
+        let unique = nullsDistinct ? "UNIQUE" : "UNIQUE NULLS NOT DISTINCT"
+        let sql = "ALTER TABLE \(client.quoteQualified(table, schema: schema)) ADD CONSTRAINT \(client.quoteIdentifier(name)) \(unique) (\(columnList))"
         return try await client.executeDDL(sql)
     }
 

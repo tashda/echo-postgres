@@ -254,6 +254,10 @@ public final class PostgresClient: Sendable, ServiceLifecycle.Service {
     let pool: Pool
     let factory: ConnectionFactory
     let runningAtomic = ManagedAtomic(false)
+
+    /// postgres-wire: whether ``run()`` has started, so a caller that starts it in a task can wait
+    /// for it before the first lease (which otherwise logs that run() hasn't been called).
+    public var isRunning: Bool { self.runningAtomic.load(ordering: .relaxed) }
     let backgroundLogger: Logger
 
     /// Creates a new ``PostgresClient``, that does not log any background information.
