@@ -7,7 +7,7 @@ import Testing
 /// TLS through libpq with the Kit's keywords, on the lab's TLS recipes
 /// (`pg-18-tls-required`, `pg-17-tls-client-certificate`): `POSTGRES_TEST_TLS_URL` carries the
 /// mode, the lab CA and, for certificate sign-in, the client certificate and key.
-@Suite("PostgresKit TLS through libpq", .testServer("POSTGRES_TEST_TLS_URL"), .serialized)
+@Suite("PostgresKit TLS through libpq", .testServer("POSTGRES_TEST_TLS_URL"), .serialized, .enabled(if: LabTLSRecipe.certificate == nil))
 struct PostgresLibpqTLSTests {
     private func connect(_ configuration: PostgresConfiguration) async throws -> PGConnection {
         let setup = try await configuration.libpqSetup(password: configuration.password)

@@ -7,7 +7,7 @@ name: "Tests"
 
 on:
   push:
-    branches: ["dev", "main"]
+    branches: ["dev", "main", "official"]
   pull_request:
     branches: ["main", "dev"]
   workflow_dispatch:
@@ -28,8 +28,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Install MIT Kerberos (needed to build on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq libpq-dev
       - run: swift --version
       - name: Build
         run: swift build --build-tests
@@ -59,8 +65,14 @@ jobs:
       POSTGRES_TEST_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Install MIT Kerberos (needed to build on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq libpq-dev
       - name: Integration tests
         run: swift test --skip "$SPECIAL_SUITES"
 
@@ -74,8 +86,14 @@ jobs:
       POSTGRES_TEST_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Install MIT Kerberos (needed to build on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq libpq-dev
       - name: Start a server that requires TLS (as in TESTING.md)
         run: |
           mkdir -p /tmp/pg-tls && cd /tmp/pg-tls
@@ -102,8 +120,14 @@ jobs:
       POSTGRES_TEST_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Install MIT Kerberos (needed to build on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq libpq-dev
       - name: Start a primary and a standby (as in TESTING.md)
         run: |
           docker network create pg-pair
@@ -131,8 +155,14 @@ jobs:
       POSTGRES_TEST_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Install MIT Kerberos (needed to build on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq libpq-dev
       - name: Start a server and a Toxiproxy in front of it (as in TESTING.md)
         run: |
           docker network create pg-proxy
