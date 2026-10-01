@@ -22,8 +22,9 @@ public extension PostgresAdminClient {
         isTemplate: Bool? = nil,
         strategy: String? = nil
     ) async throws -> Int {
+        // PostgreSQL has no CREATE DATABASE IF NOT EXISTS: look for it first.
+        if ifNotExists, try await databaseExists(name) { return 0 }
         var parts: [String] = ["CREATE DATABASE"]
-        if ifNotExists { parts.append("IF NOT EXISTS") }
         parts.append(client.quoteIdentifier(name))
 
         var withClauses: [String] = []
@@ -48,6 +49,16 @@ public extension PostgresAdminClient {
         }
 
         return try await client.executeDDL(parts.joined(separator: " "))
+    }
+
+    /// True when a database (or template) with this name exists.
+    func databaseExists(_ name: String) async throws -> Bool {
+        let bind = try client.toPGData(value: name)
+        return try await client.withConnection { conn in
+            let rows = try await conn.query("SELECT count(*) FROM pg_catalog.pg_database WHERE datname = $1", binds: [bind])
+            for try await count in rows.decode(Int64.self) { return count > 0 }
+            return false
+        }
     }
 
     /// Drop an existing database.
