@@ -5,6 +5,9 @@ import Testing
 /// Client certificate files without a server: the TLS configuration is built (and fails) before a
 /// connection is attempted. Files in Support/certificates: a self-signed client certificate and its
 /// key as PEM, DER, encrypted PEM and PKCS#12 (modern AES and legacy 3DES), password correct-horse.
+/// macOS only: the files are opened by EchoTLS (Keychain's PKCS#12 import, DER and PKCS#1
+/// conversion); on Linux libpq reads PEM files itself, when connecting.
+#if canImport(EchoTLS)
 @Suite struct ClientCertificateFileTests {
     private static let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         .appendingPathComponent("Support/certificates")
@@ -48,3 +51,4 @@ import Testing
         #expect(await kind { try await tlsSetup(certificate: "client.crt", key: "no-such-file.key") } == .unreadable)
     }
 }
+#endif
