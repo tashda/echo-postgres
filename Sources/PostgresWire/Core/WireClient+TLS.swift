@@ -33,6 +33,7 @@ extension PostgresWireClient {
             if let sslRootCertPath { tlsConfig.trustRoots = .file(sslRootCertPath) }
         }
         try PostgresClientCertificate.apply(to: &tlsConfig, certPath: sslCertPath, keyPath: sslKeyPath, keyPassword: sslKeyPassword)
+        TLSKeyLog.apply(to: &tlsConfig)
         return tlsConfig
     }
 
