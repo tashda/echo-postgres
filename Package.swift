@@ -95,6 +95,8 @@ let package = Package(
             name: "PostgresKit",
             dependencies: [
                 "PostgresWire",
+                "PGLibpq",
+                .product(name: "EchoTLS", package: "echo-libraries", condition: .when(platforms: [.macOS])),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Metrics", package: "swift-metrics")
