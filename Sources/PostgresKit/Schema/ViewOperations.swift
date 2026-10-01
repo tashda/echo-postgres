@@ -36,12 +36,15 @@ public extension PostgresViewClient {
         name: String,
         schema: String? = nil,
         query: String,
-        ifNotExists: Bool = false
+        ifNotExists: Bool = false,
+        withData: Bool = true
     ) async throws -> Int {
         var parts: [String] = ["CREATE MATERIALIZED VIEW"]
         if ifNotExists { parts.append("IF NOT EXISTS") }
         parts.append(client.quoteQualified(name, schema: schema))
         parts.append("AS \(query)")
+        // WITH NO DATA leaves the view unpopulated: reading it errors until it is refreshed.
+        if !withData { parts.append("WITH NO DATA") }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
 

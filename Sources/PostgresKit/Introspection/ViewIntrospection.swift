@@ -37,7 +37,8 @@ public extension PostgresMetadataClient {
                 m.matviewname::text,
                 m.matviewowner::text,
                 m.definition::text,
-                obj_description(c.oid, 'pg_class')::text AS comment
+                obj_description(c.oid, 'pg_class')::text AS comment,
+                m.ispopulated
             FROM pg_matviews m
             JOIN pg_class c ON c.relname = m.matviewname AND c.relkind = 'm'
             JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = m.schemaname
@@ -50,8 +51,9 @@ public extension PostgresMetadataClient {
                 client.toPGData(value: view)
             ])
             for row in rows {
-                let (name, owner, definition, comment) = try row.decode((String, String, String, String?).self)
-                return PostgresViewDetails(name: name, schema: schema, owner: owner, definition: definition, comment: comment)
+                let (name, owner, definition, comment, populated) = try row.decode((String, String, String, String?, Bool).self)
+                return PostgresViewDetails(name: name, schema: schema, owner: owner, definition: definition, comment: comment,
+                                           isPopulated: populated)
             }
             return nil
         }
@@ -86,12 +88,15 @@ public struct PostgresViewDetails: Sendable {
     public let owner: String
     public let definition: String
     public let comment: String?
+    /// Materialized views only: false after `WITH NO DATA` until the first refresh. Nil for views.
+    public let isPopulated: Bool?
 
-    public init(name: String, schema: String, owner: String, definition: String, comment: String?) {
+    public init(name: String, schema: String, owner: String, definition: String, comment: String?, isPopulated: Bool? = nil) {
         self.name = name
         self.schema = schema
         self.owner = owner
         self.definition = definition
         self.comment = comment
+        self.isPopulated = isPopulated
     }
 }

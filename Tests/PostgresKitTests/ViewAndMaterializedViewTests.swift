@@ -108,6 +108,32 @@ final class ViewAndMaterializedViewTests: PostgresKitTestCase {
         _ = try await client.views.dropMaterializedView(name: name)
     }
 
+    func testMaterializedViewWithNoDataIsUnpopulatedUntilRefreshed() async throws {
+        let name = uniqueName("mv")
+        defer { Task { [client = self.client!] in _ = try? await client.views.dropMaterializedView(name: name, ifExists: true) } }
+
+        _ = try await client.views.createMaterializedView(name: name, schema: "public", query: "SELECT 1 AS n", withData: false)
+        var details = try await client.metadata.materializedViewDetails(schema: "public", view: name)
+        XCTAssertEqual(details?.isPopulated, false)
+
+        _ = try await client.views.refreshMaterializedView(name: name)
+        details = try await client.metadata.materializedViewDetails(schema: "public", view: name)
+        XCTAssertEqual(details?.isPopulated, true)
+    }
+
+    /// Server-side prepared statements return binary rows; booleans and integers must decode.
+    func testPreparedRowsDecodeNonTextColumns() async throws {
+        let client = try XCTUnwrap(self.client)
+        let schema = try client.toPGData(value: "pg_catalog")
+        let rows = try await client.withConnection { connection in
+            try await connection.queryPreparedRows("SELECT nspname = $1, 42::int8, 'x'::text FROM pg_namespace WHERE nspname = $1", binds: [schema])
+        }
+        let (flag, number, text) = try XCTUnwrap(rows.first).decode((Bool, Int64, String).self)
+        XCTAssertEqual(flag, true)
+        XCTAssertEqual(number, 42)
+        XCTAssertEqual(text, "x")
+    }
+
     func testRefreshMaterializedView() async throws {
         let name = uniqueName("mv")
         defer { Task { [client = self.client!] in _ = try? await client.views.dropMaterializedView(name: name, ifExists: true) } }

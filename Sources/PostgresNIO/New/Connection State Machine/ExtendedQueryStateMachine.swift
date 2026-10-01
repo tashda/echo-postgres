@@ -267,7 +267,9 @@ struct ExtendedQueryStateMachine {
             return .wait
 
         case .prepareStatement(_, _, _, let eventLoopPromise):
-            return .succeedPreparedStatementCreation(eventLoopPromise, with: rowDescription)
+            // Executing the statement binds with binary result formats, so the description it
+            // keeps must say binary too, or every non-text column is decoded as text.
+            return .succeedPreparedStatementCreation(eventLoopPromise, with: RowDescription(columns: columns))
         }
     }
     
