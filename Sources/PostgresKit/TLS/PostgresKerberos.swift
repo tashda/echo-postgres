@@ -19,17 +19,19 @@ public enum PostgresKerberos {
     /// The user's current ticket. Local only (the credential cache); it never asks the KDC.
     public static func currentTicket() -> PostgresKerberosTicket {
         #if canImport(EchoKerberos)
-        KerberosTicket.current()
+        switch KerberosTicket.current() {
+        case .valid(let principal, let expiresAt): .valid(principal: principal, expiresAt: expiresAt)
+        case .expired(let principal): .expired(principal: principal)
+        case .none: .none
+        case .unavailable: .unavailable
+        }
         #else
         .unavailable
         #endif
     }
 }
 
-#if canImport(EchoKerberos)
-/// The user's Kerberos ticket (EchoKerberos).
-public typealias PostgresKerberosTicket = KerberosTicket
-#else
+/// The user's Kerberos ticket as this process sees it.
 public enum PostgresKerberosTicket: Sendable, Equatable {
     case valid(principal: String, expiresAt: Date?)
     case expired(principal: String?)
@@ -43,7 +45,6 @@ public enum PostgresKerberosTicket: Sendable, Equatable {
         }
     }
 }
-#endif
 
 /// Why Kerberos sign-in failed, in words someone can act on, with libpq's own text.
 public struct PostgresKerberosError: Error, LocalizedError, Sendable {
