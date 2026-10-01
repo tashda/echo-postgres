@@ -1,138 +1,85 @@
-# PostgresWire & PostgresKit
+# PostgresKit
 
-A high-performance, SwiftNIO-based PostgreSQL client library for Swift, providing both low-level wire protocol access and high-level ergonomic APIs for application development.
+A PostgreSQL client library for Swift on **libpq**, PostgreSQL's own client library. Echo uses it
+for every PostgreSQL connection.
 
 ## Overview
 
-- **PostgresWire**: A thin, focused wrapper over Vapor's `PostgresNIO`, exposing a minimal interface for connections, queries, and streaming. It is designed to be easily testable and extremely fast.
-- **PostgresKit**: Built on top of `PostgresWire`, this module provides a higher-level client with connection abstractions, statement caching, metadata utilities, and ergonomic APIs suitable for modern Swift applications.
+- **PGLibpq**: the transport, and the only code that calls libpq. Each connection is an actor on its
+  own serial queue, driving libpq's non-blocking API and woken by socket readiness, so no thread ever
+  blocks while the server works. Rows arrive in chunks (`PQsetChunkedRowsMode`, libpq 17+).
+- **PostgresKit**: the client Echo calls: a small pool, query tab sessions, streaming rows, scripts,
+  COPY, cancel, LISTEN/NOTIFY, notices, metadata, administration and security APIs, failover, and the
+  connection the bundled tools use (`PostgresToolConnection`).
+
+libpq comes from [echo-libraries](https://github.com/tashda/echo-libraries) on macOS (a universal
+framework with OpenSSL and the PostgreSQL tools) and from the system on Linux.
 
 ## Features
 
-- **High Performance**: Built directly on `SwiftNIO` and `PostgresNIO`.
-- **Async/Await**: Modern Swift concurrency support throughout the API.
-- **Statement Caching**: Simple LRU cache for prepared statements to optimize repeated queries.
-- **Execution Options**: Fine-grained control over query execution, including server-side cursor thresholds and fetch baselines.
-- **Metadata Utilities**: Helpers to list databases, schemas, tables, and object definitions natively in Swift.
-- **Independent**: Clean API surface completely independent of any specific web framework.
-- **Failover**: with several hosts (libpq's multi-host strings, `targetSessionAttributes`), the pool
-  moves to another server when its own can't be reached (after `connectTimeout`, not PostgresNIO's
-  60 s) or, for read-write and primary, turns read-only after a failover. A call is retried only when
-  nothing could have run twice.
-- **Sign-in**: passwords (SCRAM-SHA-256, MD5), TLS in every libpq `sslmode` with client certificates
-  (and encrypted keys, `sslKeyPassword`), AWS RDS IAM tokens, and **Kerberos** (GSSAPI, and SSPI from
-  Windows servers) with the user's existing ticket (`kerberosServiceName`, `postgres` by default).
+- **Streaming in bounded memory**: rows are read as they are asked for; a slow reader slows the server.
+- **Values as the server writes them**: every value is the server's own text (ISO dates, the server's
+  `money` and interval formats), so what Echo shows is what `psql` shows.
+- **Cancel and Force Stop**: cancel through libpq's cancel API; a connection can be closed while a
+  statement runs.
+- **Failover**: several hosts with `targetSessionAttributes` and `loadBalanceHosts` (libpq's own
+  multi-host connect); the pool moves on when its server goes away.
+- **Sign-in and TLS**: SCRAM-SHA-256, MD5, every `sslmode`, client certificates (PEM, DER, PKCS#8,
+  encrypted keys, `.p12`), the Mac's trusted CAs for verify-ca/verify-full, and **Kerberos** (GSSAPI)
+  with the user's ticket.
+- **Closed to the environment**: `PG*` variables, `~/.pgpass` and `~/.postgresql` never change how a
+  connection is made.
 
-## Prerequisites
+## Requirements
 
-- **Swift 6.0+**
-- **PostgreSQL 14, 15, 16, 17, 18** (Required for integration testing)
-- **Docker** (Optional, for automated testing)
-- **Linux only:** MIT Kerberos headers (`apt install libkrb5-dev`, `dnf install krb5-devel`) for
-  Kerberos sign-in. macOS uses the built-in GSS framework.
+- Swift 6.2, macOS 26.
+- Linux: libpq 17 or newer with its headers (`libpq-dev` from the PGDG repository on Ubuntu 24.04,
+  which ships 16).
 
 ## Installation
 
-Add `postgres-wire` to your `Package.swift` dependencies:
-
 ```swift
 dependencies: [
-    .package(url: "https://github.com/tashda/postgres-wire.git", from: "1.0.0")
+    .package(url: "https://github.com/tashda/postgres-wire.git", branch: "dev")
 ]
 ```
 
-Add the products you need to your targets:
-
 ```swift
-targets: [
-    .target(
-        name: "YourApp",
-        dependencies: [
-            .product(name: "PostgresKit", package: "postgres-wire")
-            // Or just PostgresWire if you only need the low-level client
-        ]
-    )
-]
+.target(name: "YourApp", dependencies: [.product(name: "PostgresKit", package: "postgres-wire")])
 ```
 
 ## Usage
 
-### High-Level API (PostgresKit)
-
-PostgresKit provides an ergonomic interface for querying your database with modern concurrency:
-
 ```swift
 import PostgresKit
 
-// 1. Configure the connection
-let config = PostgresConfiguration(
-    host: "localhost",
-    port: 5432,
-    database: "my_db",
-    username: "postgres",
-    password: "password",
-    useTLS: false
+var configuration = PostgresConfiguration(
+    host: "localhost", port: 5432, database: "my_db", username: "postgres", password: "password"
 )
+configuration.sslMode = .verifyFull
 
-// 2. Connect
-let client = try await PostgresClient.connect(configuration: config)
+let client = try await PostgresClient.connect(configuration: configuration)
 defer { client.close() }
 
-// 3. Query
-let rows = try await client.simpleQuery("SELECT id, name FROM users WHERE active = true")
-for try await row in rows {
-    print("User: \(row)")
+for try await row in try await client.simpleQuery("SELECT id, name FROM users WHERE active") {
+    let (id, name) = try row.decode((Int, String).self)
+    print(id, name)
 }
-```
-
-### Low-Level API (PostgresWire)
-
-PostgresWire is available if you need granular control over the execution protocol:
-
-```swift
-import PostgresWire
-
-let options = PostgresExecutionOptions(
-    mode: .auto,               // or .simple, .cursor
-    cursorThreshold: 25_000,   // LIMIT ≤ 25k → use simple
-    fetchBaseline: 4_096,      // baseline cursor fetch
-    fetchRampMultiplier: 24,
-    fetchRampMax: 524_288,
-    progressThrottleMs: 120
-)
-
-let client = try await PostgresWireClient.connect(configuration: config)
-let rows = try await client.query(
-    WireQuery(sql: "SELECT * FROM public.fixture LIMIT 10000;"),
-    options: options
-)
 ```
 
 ## Testing
 
-The unit tests need nothing: `swift test`. The integration tests need a PostgreSQL server, which
-they find through a URL variable, and are skipped without it:
+The unit tests need nothing: `swift test`. The integration tests find their server through URL
+variables (`POSTGRES_TEST_URL`, `POSTGRES_TEST_TLS_URL`, …) and are skipped without them. With
+[echo-server-lab](https://github.com/tashda/echo-server-lab):
 
 ```bash
-docker run -d --name postgres-test -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
-POSTGRES_TEST_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' swift test
+swift run --package-path ../echo-server-lab serverlab run --recipe pg-17-empty -- swift test
 ```
 
 [TESTING.md](TESTING.md) lists every variable (TLS, a standby, failover through a proxy, Kerberos)
-with the `docker run` lines for each setup.
-
-## Documentation
-
-Comprehensive documentation can be generated using Swift-DocC:
-
-```bash
-swift package generate-documentation
-```
+with a `docker run` line for each setup.
 
 ## License
 
-This project is licensed under the Apache 2.0 License. See the [LICENSE.txt](LICENSE.txt) file for details.
-
-It includes a copy of [PostgresNIO](https://github.com/vapor/postgres-nio) (MIT License) in
-`Sources/PostgresNIO` and `Sources/_ConnectionPoolModule`; its licence, notice and the list of changes
-are in [ThirdParty/postgres-nio](ThirdParty/postgres-nio).
+Apache 2.0; see [LICENSE.txt](LICENSE.txt). libpq is under the PostgreSQL Licence.
