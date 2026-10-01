@@ -108,8 +108,13 @@ internal func quoteLiteralSQL(_ literal: String) -> String {
     "\(PostgresQuoting.quoteLiteral(literal))"
 }
 
+/// A type name for a cast. Plain names keep SQL's own spelling, so `integer`, `double precision`,
+/// `numeric(10,2)`, `text[]` and `sales.address` work (quoting them would ask for a type named
+/// `"integer"` or `"text[]"`); anything else is quoted.
 internal func quoteTypeNameSQL(_ typeName: String) -> String {
-    typeName.split(separator: ".", maxSplits: 1)
+    let plain = #"^[A-Za-z_][A-Za-z0-9_]*( [A-Za-z_][A-Za-z0-9_]*)*(\.[A-Za-z_][A-Za-z0-9_]*)?(\([0-9 ,]+\))?( with(out)? time zone)?(\[[0-9]*\])*$"#
+    if typeName.range(of: plain, options: .regularExpression) != nil { return typeName }
+    return typeName.split(separator: ".", maxSplits: 1)
         .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
         .joined(separator: ".")
 }
