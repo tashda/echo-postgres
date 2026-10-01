@@ -54,7 +54,7 @@ public extension PostgresSecurityClient {
         set: Bool? = nil
     ) async throws -> Int {
         var parts: [String] = ["GRANT \(client.quoteIdentifier(role))"]
-        parts.append("TO \(client.quoteIdentifier(to))")
+        parts.append("TO \(client.quoteGrantee(to))")
         // INHERIT and SET options need PostgreSQL 16+; they are only sent when given.
         var options: [String] = []
         if admin { options.append("ADMIN TRUE") }
@@ -74,7 +74,7 @@ public extension PostgresSecurityClient {
         var parts: [String] = ["REVOKE"]
         if admin { parts.append("ADMIN OPTION FOR") }
         parts.append("\(client.quoteIdentifier(role))")
-        parts.append("FROM \(client.quoteIdentifier(from))")
+        parts.append("FROM \(client.quoteGrantee(from))")
         return try await client.executeDDL(parts.joined(separator: " "))
     }
 
@@ -89,7 +89,7 @@ public extension PostgresSecurityClient {
         var parts: [String] = ["GRANT"]
         parts.append(privileges.map { $0.rawValue }.joined(separator: ", "))
         parts.append("ON SCHEMA \(client.quoteIdentifier(onSchema))")
-        parts.append("TO \(client.quoteIdentifier(to))")
+        parts.append("TO \(client.quoteGrantee(to))")
         if withGrantOption { parts.append("WITH GRANT OPTION") }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -105,7 +105,7 @@ public extension PostgresSecurityClient {
         var parts: [String] = ["REVOKE"]
         parts.append(privileges.map { $0.rawValue }.joined(separator: ", "))
         parts.append("ON SCHEMA \(client.quoteIdentifier(onSchema))")
-        parts.append("FROM \(client.quoteIdentifier(from))")
+        parts.append("FROM \(client.quoteGrantee(from))")
         if cascade { parts.append("CASCADE") }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -121,7 +121,7 @@ public extension PostgresSecurityClient {
         var parts: [String] = ["GRANT"]
         parts.append(privileges.map { $0.rawValue }.joined(separator: ", "))
         parts.append("ON DATABASE \(client.quoteIdentifier(onDatabase))")
-        parts.append("TO \(client.quoteIdentifier(to))")
+        parts.append("TO \(client.quoteGrantee(to))")
         if withGrantOption { parts.append("WITH GRANT OPTION") }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -137,7 +137,7 @@ public extension PostgresSecurityClient {
         var parts: [String] = ["REVOKE"]
         parts.append(privileges.map { $0.rawValue }.joined(separator: ", "))
         parts.append("ON DATABASE \(client.quoteIdentifier(onDatabase))")
-        parts.append("FROM \(client.quoteIdentifier(from))")
+        parts.append("FROM \(client.quoteGrantee(from))")
         if cascade { parts.append("CASCADE") }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -150,7 +150,7 @@ public extension PostgresSecurityClient {
         onObjectType: PostgresObjectType = .tables,
         to: String
     ) async throws -> Int {
-        let sql = "ALTER DEFAULT PRIVILEGES IN SCHEMA \(client.quoteIdentifier(schema)) GRANT \(privileges.map { $0.rawValue }.joined(separator: ", ")) ON \(onObjectType.rawValue) TO \(client.quoteIdentifier(to))"
+        let sql = "ALTER DEFAULT PRIVILEGES IN SCHEMA \(client.quoteIdentifier(schema)) GRANT \(privileges.map { $0.rawValue }.joined(separator: ", ")) ON \(onObjectType.rawValue) TO \(client.quoteGrantee(to))"
         return try await client.executeDDL(sql)
     }
 
@@ -162,7 +162,7 @@ public extension PostgresSecurityClient {
         onObjectType: PostgresObjectType = .tables,
         from: String
     ) async throws -> Int {
-        let sql = "ALTER DEFAULT PRIVILEGES IN SCHEMA \(client.quoteIdentifier(schema)) REVOKE \(privileges.map { $0.rawValue }.joined(separator: ", ")) ON \(onObjectType.rawValue) FROM \(client.quoteIdentifier(from))"
+        let sql = "ALTER DEFAULT PRIVILEGES IN SCHEMA \(client.quoteIdentifier(schema)) REVOKE \(privileges.map { $0.rawValue }.joined(separator: ", ")) ON \(onObjectType.rawValue) FROM \(client.quoteGrantee(from))"
         return try await client.executeDDL(sql)
     }
 
@@ -177,7 +177,7 @@ public extension PostgresSecurityClient {
         var parts: [String] = ["GRANT"]
         parts.append(privileges.map { $0.rawValue }.joined(separator: ", "))
         parts.append("ON ALL TABLES IN SCHEMA \(client.quoteIdentifier(inSchema))")
-        parts.append("TO \(client.quoteIdentifier(to))")
+        parts.append("TO \(client.quoteGrantee(to))")
         if withGrantOption { parts.append("WITH GRANT OPTION") }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -193,7 +193,7 @@ public extension PostgresSecurityClient {
         var parts: [String] = ["REVOKE"]
         parts.append(privileges.map { $0.rawValue }.joined(separator: ", "))
         parts.append("ON ALL TABLES IN SCHEMA \(client.quoteIdentifier(inSchema))")
-        parts.append("FROM \(client.quoteIdentifier(from))")
+        parts.append("FROM \(client.quoteGrantee(from))")
         if cascade { parts.append("CASCADE") }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
