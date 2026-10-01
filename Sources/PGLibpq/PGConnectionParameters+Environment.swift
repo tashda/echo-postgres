@@ -27,7 +27,7 @@ extension PGConnectionParameters {
     /// output format back to ISO when needed (`requireISODates`). The date *order* (DMY/MDY, for
     /// parsing what users type) and the time zone stay as the server or those variables say; Echo
     /// keeps the server's order on purpose (a European server set to DMY stays DMY).
-    func closedToTheEnvironment() -> PGConnectionParameters {
+    public func closedToTheEnvironment() -> PGConnectionParameters {
         var closed = self
         let defaults: KeyValuePairs<String, String> = [
             "sslmode": "prefer",
