@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Database maintenance operations.
 public extension PostgresMaintenanceClient {

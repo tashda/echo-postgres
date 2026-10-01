@@ -1,97 +1,45 @@
-import PostgresNIO
 import Foundation
 
+/// A Swift value that can be sent as a statement parameter.
 public protocol PostgresEncodable {
-    var pgDataType: PostgresDataType { get }
-    func encode(into: inout PGData) throws
+    func postgresBind() throws -> PostgresBind
 }
 
+/// An `Encodable` value sent as `jsonb`.
 public protocol JSONBEncodable: Encodable, PostgresEncodable {}
 
-extension String: PostgresEncodable {
-    public var pgDataType: PostgresDataType { .text }
-    public func encode(into: inout PGData) throws {
-        into = PGData(string: self)
+extension JSONBEncodable {
+    public func postgresBind() throws -> PostgresBind {
+        .json(String(decoding: try JSONEncoder().encode(self), as: UTF8.self))
     }
 }
 
-extension Int: PostgresEncodable {
-    public var pgDataType: PostgresDataType { .int8 }
-    public func encode(into: inout PGData) throws {
-        into = PGData(int: self)
-    }
-}
+extension String: PostgresEncodable { public func postgresBind() -> PostgresBind { .text(self) } }
+extension Int: PostgresEncodable { public func postgresBind() -> PostgresBind { .int(self) } }
+extension Int32: PostgresEncodable { public func postgresBind() -> PostgresBind { .int32(self) } }
+extension Int64: PostgresEncodable { public func postgresBind() -> PostgresBind { .int(Int(self)) } }
+extension Double: PostgresEncodable { public func postgresBind() -> PostgresBind { .double(self) } }
+extension Bool: PostgresEncodable { public func postgresBind() -> PostgresBind { .bool(self) } }
+extension UUID: PostgresEncodable { public func postgresBind() -> PostgresBind { .uuid(self) } }
+extension Date: PostgresEncodable { public func postgresBind() -> PostgresBind { .timestamp(self) } }
+extension Data: PostgresEncodable { public func postgresBind() -> PostgresBind { .bytes(self) } }
+extension Decimal: PostgresEncodable { public func postgresBind() -> PostgresBind { .decimal(self) } }
 
-extension Double: PostgresEncodable {
-    public var pgDataType: PostgresDataType { .float8 }
-    public func encode(into: inout PGData) throws {
-        into = PGData(double: self)
-    }
-}
-
-extension Bool: PostgresEncodable {
-    public var pgDataType: PostgresDataType { .bool }
-    public func encode(into: inout PGData) throws {
-        into = PGData(bool: self)
-    }
-}
-
-extension UUID: PostgresEncodable {
-    public var pgDataType: PostgresDataType { .uuid }
-    public func encode(into: inout PGData) throws {
-        into = PGData(uuid: self)
-    }
-}
-
-extension Date: PostgresEncodable {
-    public var pgDataType: PostgresDataType { .date }
-    public func encode(into: inout PGData) throws {
-        into = PGData(date: self)
-    }
-}
-
-extension Data: PostgresEncodable {
-    public var pgDataType: PostgresDataType { .bytea }
-    public func encode(into: inout PGData) throws {
-        into = PGData(bytes: self)
-    }
-}
-
-extension Array: PostgresEncodable where Element: Encodable {
-    public var pgDataType: PostgresDataType { .text }
-    public func encode(into: inout PGData) throws {
-        // For basic types, create PostgreSQL array syntax
-        if Element.self == String.self {
-            let stringArray = self as! [String]
-            let escapedStrings = stringArray.map { string in
-                let escaped = string.replacingOccurrences(of: "\"", with: "\\\"")
-                return "\"\(escaped)\""
-            }
-            let arrayString = "{" + escapedStrings.joined(separator: ",") + "}"
-            into = PGData(string: arrayString)
-        } else if Element.self == Int.self {
-            let intArray = self as! [Int]
-            let arrayString = "{" + intArray.map { String($0) }.joined(separator: ",") + "}"
-            into = PGData(string: arrayString)
-        } else if Element.self == UUID.self {
-            // For UUID arrays, encode as JSON and handle at database level
-            let encoder = JSONEncoder()
-            let data = try encoder.encode(self)
-            into = PGData(jsonb: data)
-        } else {
-            // Fallback to JSON encoding for other types
-            let encoder = JSONEncoder()
-            let data = try encoder.encode(self)
-            into = PGData(jsonb: data)
+extension Optional: PostgresEncodable where Wrapped: PostgresEncodable {
+    public func postgresBind() throws -> PostgresBind {
+        switch self {
+        case .some(let value): try value.postgresBind()
+        case .none: .null
         }
     }
 }
 
-extension JSONBEncodable {
-    public var pgDataType: PostgresDataType { .jsonb }
-    public func encode(into: inout PGData) throws {
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(self)
-        into = PGData(jsonb: data)
+extension Array: PostgresEncodable where Element: Encodable {
+    /// Strings, integers and UUIDs as PostgreSQL arrays; anything else as `jsonb`.
+    public func postgresBind() throws -> PostgresBind {
+        if let strings = self as? [String] { return .array(strings, arrayTypeOID: 1009) }
+        if let ints = self as? [Int] { return .array(ints.map(String.init), arrayTypeOID: 1016) }
+        if let uuids = self as? [UUID] { return .array(uuids.map { $0.uuidString.lowercased() }, arrayTypeOID: 2951) }
+        return .json(String(decoding: try JSONEncoder().encode(self), as: UTF8.self))
     }
 }

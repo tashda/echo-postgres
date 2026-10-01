@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// High-level Index Data Definition Language (DDL) operations.
 public extension PostgresIndexClient {

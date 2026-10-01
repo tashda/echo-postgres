@@ -345,24 +345,6 @@ final class AdvancedClientTests: PostgresKitTestCase {
 
     // MARK: - Cursor Streaming
 
-    func testStreamQueryWithCursor() async throws {
-        let result = try await client.streamQueryWithCursor(
-            "SELECT generate_series(1, 50) AS n",
-            configuration: PostgresStreamConfiguration { $0.streamingFetchSize = 10 }
-        ) { _ async in
-            // Callback receives streaming updates; side-effect-free in test
-        }
-        // If the call completes without throwing, streaming worked
-        _ = result
-    }
-
-    func testStreamQueryWithCursor_LargerDataset() async throws {
-        _ = try await client.streamQueryWithCursor(
-            "SELECT generate_series(1, 200) AS n"
-        ) { _ async in }
-        // If we get here without error, cursor streaming completed successfully
-    }
-
     // MARK: - Helpers
 
     private func rowCount(table: String) async throws -> Int {

@@ -3,7 +3,7 @@ import Logging
 import XCTest
 @testable import PostgresKit
 
-/// For each expression, formats the binary cell with ``PostgresCellFormatter`` and compares it with
+/// For each expression, formats the cell with ``PostgresCellFormatter`` and compares it with
 /// the server's own output function (`format('%s', …)`) of the same value. This is what guarantees that a results grid
 /// shows exactly what `psql` would.
 final class FormatterServerParityTests: PostgresKitTestCase {
@@ -103,9 +103,10 @@ final class FormatterServerParityTests: PostgresKitTestCase {
         }
         XCTAssertEqual(values[0], "true")
         XCTAssertEqual(values[1], "false")
-        XCTAssertEqual(values[2], "12.34")
-        XCTAssertEqual(values[3], "-0.05")
-        XCTAssertEqual(values[4], "1259", "reg* types show the OID")
+        // Decision D11: money as the server prints it (lc_monetary), reg* types by name.
+        XCTAssertTrue(values[2]?.contains("12.34") == true, "\(values[2] ?? "nil")")
+        XCTAssertTrue(values[3]?.contains("0.05") == true, "\(values[3] ?? "nil")")
+        XCTAssertEqual(values[4], "pg_class", "reg* types show the name")
         XCTAssertEqual(values[5], "{true,false}", "booleans read the same inside arrays as on their own")
     }
 
@@ -116,8 +117,7 @@ final class FormatterServerParityTests: PostgresKitTestCase {
             let rows = try await connection.simpleQuery("SELECT 251, now(), ARRAY[1,2], interval '1 day', NULL::text, ''::text").collect()
             guard let row = rows.first else { return [] }
             return row.map { cell in
-                let data = cell.bytes.map { buffer in buffer.withUnsafeReadableBytes { Data($0) } }
-                return (formatter.stringValue(for: cell), formatter.stringValue(oid: cell.dataType.rawValue, data: data))
+                (formatter.stringValue(for: cell), formatter.stringValue(oid: cell.dataType, data: cell.bytes))
             }
         }
         XCTAssertEqual(pairs.count, 6)

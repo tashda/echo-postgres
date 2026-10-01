@@ -1,6 +1,4 @@
 import Foundation
-import PostgresWire
-import PostgresNIO
 
 /// High-level Data Manipulation Language (DML) operations.
 public extension PostgresBulkClient {
@@ -102,14 +100,14 @@ public extension PostgresConnection {
 
         let columnList = columns.isEmpty ? "" : "(\(columns.map(quoteIdentifier).joined(separator: ", ")))"
 
-        var allBinds: [PGData] = []
+        var allBinds: [PostgresBind] = []
         var bindIndex = 1
         let valuePlaceholders = try values.map { row in
             let fragments = try row.map { value in
                 switch value {
                 case .bind(let encodable):
                     defer { bindIndex += 1 }
-                    allBinds.append(try toPGData(value: encodable))
+                    allBinds.append(try bind(encodable))
                     return "$\(bindIndex)"
                 case .sql(let sql):
                     return sql

@@ -1,9 +1,6 @@
 import Foundation
-import PostgresNIO
-import NIO
-import NIOCore
 
-public struct IPAddress: Equatable, Hashable, Codable {
+public struct IPAddress: Equatable, Hashable, Codable, Sendable {
     public let string: String
 
     public init(string: String) {
@@ -12,9 +9,9 @@ public struct IPAddress: Equatable, Hashable, Codable {
 }
 
 extension IPAddress: PostgresEncodable {
-    public var pgDataType: PostgresDataType { .inet }
+    public func postgresBind() -> PostgresBind { .text(string, typeOID: 869) }
+}
 
-    public func encode(into: inout PGData) throws {
-        into = PGData(string: self.string)
-    }
+extension IPAddress: PostgresTextDecodable {
+    public static func decode(text: String) throws -> IPAddress { IPAddress(string: text) }
 }

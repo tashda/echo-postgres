@@ -1,5 +1,3 @@
-import PostgresWire
-import PostgresNIO
 
 /// High-level Function and Procedure Data Definition Language (DDL) operations.
 public extension PostgresRoutineClient {
@@ -69,13 +67,13 @@ public extension PostgresRoutineClient {
     }
 
     /// Execute a function and decode the first returned value.
-    func executeFunction<T: PostgresDecodable & Sendable>(
+    func executeFunction<T: PostgresTextDecodable & Sendable>(
         _ name: String,
         parameters: [Any] = [],
         decodeTo: T.Type
     ) async throws -> T {
         let paramPlaceholders = parameters.enumerated().map { index, _ in "$\(index + 1)" }.joined(separator: ", ")
-        let binds = try parameters.map { try client.toPGData(value: $0) }
+        let binds = try parameters.map { try client.bind($0) }
         let sql = "SELECT * FROM \(client.quoteIdentifier(name))(\(paramPlaceholders))"
 
         return try await client.withConnection { conn in

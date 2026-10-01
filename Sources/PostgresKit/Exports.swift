@@ -1,2 +1,1 @@
-@_exported import PostgresWire
-@_exported import PostgresNIO
+@_exported import PGLibpq

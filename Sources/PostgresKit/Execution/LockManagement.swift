@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Advisory and table lock management.
 public extension PostgresSessionClient {

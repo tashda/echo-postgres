@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// High-level Database and Schema Data Definition Language (DDL) operations.
 public extension PostgresAdminClient {
@@ -53,7 +52,7 @@ public extension PostgresAdminClient {
 
     /// True when a database (or template) with this name exists.
     func databaseExists(_ name: String) async throws -> Bool {
-        let bind = try client.toPGData(value: name)
+        let bind = try client.bind(name)
         return try await client.withConnection { conn in
             let rows = try await conn.query("SELECT count(*) FROM pg_catalog.pg_database WHERE datname = $1", binds: [bind])
             for try await count in rows.decode(Int64.self) { return count > 0 }

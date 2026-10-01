@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Detailed view and materialized view introspection.
 public extension PostgresMetadataClient {
@@ -19,8 +18,8 @@ public extension PostgresMetadataClient {
             """
         return try await client.withConnection { conn in
             let rows = try await conn.queryPreparedRows(sql, binds: [
-                client.toPGData(value: schema),
-                client.toPGData(value: view)
+                client.bind(schema),
+                client.bind(view)
             ])
             for row in rows {
                 let (name, owner, definition, comment) = try row.decode((String, String, String, String?).self)
@@ -47,8 +46,8 @@ public extension PostgresMetadataClient {
             """
         return try await client.withConnection { conn in
             let rows = try await conn.queryPreparedRows(sql, binds: [
-                client.toPGData(value: schema),
-                client.toPGData(value: view)
+                client.bind(schema),
+                client.bind(view)
             ])
             for row in rows {
                 let (name, owner, definition, comment, populated) = try row.decode((String, String, String, String?, Bool).self)
@@ -71,9 +70,9 @@ public extension PostgresMetadataClient {
             """
         return try await client.withConnection { conn in
             let rows = try await conn.queryPreparedRows(sql, binds: [
-                client.toPGData(value: schema),
-                client.toPGData(value: view),
-                client.toPGData(value: relkind)
+                client.bind(schema),
+                client.bind(view),
+                client.bind(relkind)
             ])
             for row in rows { return try row.decode(String?.self) }
             return nil

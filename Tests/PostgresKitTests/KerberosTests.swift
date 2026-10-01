@@ -56,7 +56,7 @@ struct KerberosTests {
             _ = try await signedIn(configuration)
             Issue.record("the realm has no nosuchservice principal")
         } catch {
-            #expect(kerberosError(error)?.kind == .unknownService, "\(error)")
+            #expect(kerberosError(error)?.kind == .unknownService, "\(error): \((error as? PostgresError)?.detail ?? "")")
         }
     }
 

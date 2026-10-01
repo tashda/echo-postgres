@@ -3,7 +3,7 @@ import Logging
 @testable import PostgresKit
 
 /// Integration tests for custom PostgresEncodable types (IPAddress, MACAddress).
-/// Verifies that encode(into:) produces data that PostgreSQL accepts and returns correctly.
+/// Verifies that postgresBind() produces parameters that PostgreSQL accepts and returns correctly.
 final class EncodableRoundTripTests: PostgresKitTestCase {
     private var client: PostgresKit.PostgresClient!
 
@@ -32,9 +32,7 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testIPAddressV4_EncodeAndQueryRoundTrip() async throws {
         let ip = IPAddress(string: "192.168.1.100")
-        var pgData = PGData(type: ip.pgDataType)
-        try ip.encode(into: &pgData)
-        let encoded = pgData
+        let encoded = ip.postgresBind()
 
         let result = try await client.withConnection { conn in
             try await conn.query("SELECT $1::inet::text AS addr", binds: [encoded])
@@ -48,9 +46,7 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testIPAddressV6_EncodeAndQueryRoundTrip() async throws {
         let ip = IPAddress(string: "::1")
-        var pgData = PGData(type: ip.pgDataType)
-        try ip.encode(into: &pgData)
-        let encoded = pgData
+        let encoded = ip.postgresBind()
 
         let result = try await client.withConnection { conn in
             try await conn.query("SELECT $1::inet::text AS addr", binds: [encoded])
@@ -62,9 +58,7 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testIPAddressCIDR_EncodeAndQueryRoundTrip() async throws {
         let ip = IPAddress(string: "10.0.0.0/8")
-        var pgData = PGData(type: ip.pgDataType)
-        try ip.encode(into: &pgData)
-        let encoded = pgData
+        let encoded = ip.postgresBind()
 
         let result = try await client.withConnection { conn in
             try await conn.query("SELECT $1::inet::text AS addr", binds: [encoded])
@@ -90,8 +84,6 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
         }
 
         let testIP = IPAddress(string: "172.16.0.1")
-        var pgData = PGData(type: testIP.pgDataType)
-        try testIP.encode(into: &pgData)
         let insertRow: [PostgresInsertValue] = [.inet(testIP.string)]
         let insertValues = [insertRow]
         try await client.withConnection { conn in
@@ -108,29 +100,22 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testIPAddressDataTypeIsInet() {
         let ip = IPAddress(string: "1.2.3.4")
-        XCTAssertEqual(ip.pgDataType, .inet)
+        XCTAssertEqual(ip.postgresBind().parameter.typeOID, 869)
     }
 
     // MARK: - MACAddress
 
-    func testMACAddress_ValidFormat_DoesNotThrow() throws {
-        let mac = MACAddress(string: "AA:BB:CC:DD:EE:FF")
-        var pgData = PGData(type: mac.pgDataType)
-        XCTAssertNoThrow(try mac.encode(into: &pgData), "Valid MAC address encoding should not throw")
-    }
-
-    func testMACAddress_InvalidFormat_ThrowsEncodingError() {
-        let mac = MACAddress(string: "not-a-mac")
-        var pgData = PGData(type: mac.pgDataType)
-        XCTAssertThrowsError(try mac.encode(into: &pgData), "Invalid MAC address should throw") { error in
-            XCTAssertTrue(error is PostgresKit.PostgresError, "Error should be PostgresError, got: \(type(of: error))")
+    /// MAC text goes to the server as is; the server parses every MAC format and rejects the rest.
+    func testMACAddress_InvalidFormatIsRejectedByTheServer() async throws {
+        for text in ["not-a-mac", "AA:BB:CC"] {
+            let bind = MACAddress(string: text).postgresBind()
+            do {
+                _ = try await client.withConnection { try await $0.queryResult("SELECT $1::macaddr::text", binds: [bind]) }
+                XCTFail("\(text) was accepted")
+            } catch let error as PostgresKit.PostgresError {
+                XCTAssertEqual(error.sqlState, "22P02")
+            }
         }
-    }
-
-    func testMACAddress_TooFewComponents_ThrowsEncodingError() {
-        let mac = MACAddress(string: "AA:BB:CC")
-        var pgData = PGData(type: mac.pgDataType)
-        XCTAssertThrowsError(try mac.encode(into: &pgData))
     }
 
     func testMACAddress_InsertAndSelectFromTable() async throws {
@@ -149,8 +134,6 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
         }
 
         let mac = MACAddress(string: "12:34:56:78:9a:bc")
-        var pgData = PGData(type: mac.pgDataType)
-        try mac.encode(into: &pgData)
         let insertRow: [PostgresInsertValue] = [.macaddr(mac.string)]
         let insertValues = [insertRow]
         try await client.withConnection { conn in
@@ -168,21 +151,19 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testMACAddress_DataTypeIsMacaddr() {
         let mac = MACAddress(string: "AA:BB:CC:DD:EE:FF")
-        XCTAssertEqual(mac.pgDataType, .macaddr)
+        XCTAssertEqual(mac.postgresBind().parameter.typeOID, 829)
     }
 
     // MARK: - Multiple Encodable Types Together
 
     func testMultipleEncodableTypesInQuery() async throws {
         let ip = IPAddress(string: "192.168.0.1")
-        var ipData = PGData(type: ip.pgDataType)
-        try ip.encode(into: &ipData)
-        let encodedIP = ipData
+        let encodedIP = ip.postgresBind()
 
         let result = try await client.withConnection { conn in
             try await conn.query(
                 "SELECT $1::inet::text AS ip, $2::text AS name",
-                binds: [encodedIP, PGData(string: "test")]
+                binds: [encodedIP, PostgresBind.text("test")]
             )
         }
 

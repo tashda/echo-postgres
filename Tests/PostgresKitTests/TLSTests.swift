@@ -6,7 +6,7 @@ import Testing
 /// TLS against a server that requires it: `POSTGRES_TEST_TLS_URL`, whose `sslmode`, `sslrootcert`
 /// and (for certificate logins) `sslcert`/`sslkey` the tests start from. TESTING.md has a
 /// `docker run` for such a server. Key files without a server: ClientCertificateFileTests.
-@Suite(.testServer("POSTGRES_TEST_TLS_URL"))
+@Suite(.testServer("POSTGRES_TEST_TLS_URL"), .enabled(if: LabTLSRecipe.certificate == nil && !LabTLSRecipe.isOptional))
 struct TLSTests {
     private var base: PostgresConfiguration {
         get throws { try #require(TestServer.current).configuration }

@@ -81,13 +81,15 @@ struct ProxyFailoverTests {
     }
 }
 
-/// A primary/standby pair: `POSTGRES_TEST_URL` is the primary, `POSTGRES_TEST_STANDBY_URL` the
+/// A primary/standby pair: `POSTGRES_TEST_URL` (or `POSTGRES_TEST_TLS_URL`) is the primary, `POSTGRES_TEST_STANDBY_URL` the
 /// standby. Which server each Connect To choice picks, and what the per-server probe reports.
 @Suite(.testServer("POSTGRES_TEST_STANDBY_URL"))
 struct StandbyTests {
     private func pair() throws -> (standby: PostgresConfiguration, primary: PostgresConfiguration) {
         let standby = try #require(TestServer.current).configuration
-        let primary = try #require(TestServer.url(TestServer.urlVariable), "\(TestServer.urlVariable) is the primary").configuration
+        // A TLS pair (`pg-17-primary-standby-tls-required`) names its primary in the TLS variable.
+        let primaryURL = TestServer.url(TestServer.urlVariable) ?? TestServer.url("POSTGRES_TEST_TLS_URL")
+        let primary = try #require(primaryURL, "\(TestServer.urlVariable) is the primary").configuration
         return (standby, primary)
     }
 

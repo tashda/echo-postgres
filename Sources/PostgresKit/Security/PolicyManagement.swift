@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Row Level Security (RLS) policy management.
 public extension PostgresSecurityClient {

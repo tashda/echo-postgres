@@ -1,5 +1,4 @@
 import Foundation
-import PostgresWire
 
 public extension PostgresMetadataClient {
     /// The exact number of rows in a table (`count(*)`, not the planner's estimate).

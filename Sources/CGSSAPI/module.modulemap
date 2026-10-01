@@ -1,5 +1,0 @@
-module CGSSAPI [system] {
-    header "shim.h"
-    link "gssapi_krb5"
-    export *
-}

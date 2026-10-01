@@ -102,50 +102,7 @@ final class ErrorConversionTests: PostgresKitTestCase {
         XCTAssertNil(debugInfo.sqlState)
     }
 
-    // MARK: - PSQLError Conversion
 
-    func testPSQLErrorConversionSimulation() throws {
-        // Simulate the conversion that happens in withConnection
-        let simulatedPSQLError = NSError(
-            domain: "PostgresNIO.PSQLError",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "relation \"nonexistent_table\" does not exist"]
-        )
-
-        let convertedError: Error
-        if let nsError = simulatedPSQLError as NSError?, nsError.domain == "PostgresNIO.PSQLError" {
-            convertedError = PostgresError(
-                message: nsError.localizedDescription,
-                sqlState: nil,
-                severity: nil,
-                originalError: nil
-            )
-        } else {
-            convertedError = simulatedPSQLError
-        }
-
-        XCTAssertTrue(convertedError is PostgresError)
-        let postgresError = convertedError as! PostgresError
-        XCTAssertEqual(postgresError.message, "relation \"nonexistent_table\" does not exist")
-    }
-
-    func testNonPSQLErrorPassthrough() throws {
-        let regularError = NSError(domain: "TestDomain", code: 123, userInfo: [
-            NSLocalizedDescriptionKey: "Regular error message"
-        ])
-
-        let finalError: Error
-        if regularError is PSQLError {
-            finalError = PostgresError(from: regularError as! PSQLError)
-        } else {
-            finalError = regularError
-        }
-
-        let nsError = finalError as NSError
-        XCTAssertEqual(nsError.domain, "TestDomain")
-        XCTAssertEqual(nsError.code, 123)
-        XCTAssertFalse(finalError is PostgresError)
-    }
 
     // MARK: - Result Extensions
 
@@ -165,46 +122,8 @@ final class ErrorConversionTests: PostgresKitTestCase {
         XCTAssertTrue(result.isSQLState("23505"))
     }
 
-    // MARK: - PSQLError LocalizedError Conformance
 
-    func testPSQLErrorLocalizedDescriptionUsesServerMessage() throws {
-        // The @retroactive LocalizedError conformance on PSQLError ensures
-        // that .localizedDescription returns the actual Postgres server
-        // message instead of "PostgresNIO.PSQLError error 1".
-        // We verify the conformance exists and falls back gracefully for
-        // errors without serverInfo.
-        let fallbackError = PostgresError(message: "Connection refused. The server may not be running or the port may be wrong.")
-        XCTAssertEqual(fallbackError.localizedDescription, fallbackError.message,
-                       "PostgresError (which wraps PSQLError) should return its message as localizedDescription")
-    }
 
     // MARK: - executeWithEnhancedError
 
-    func testExecuteWithEnhancedErrorSimulation() throws {
-        let testError = NSError(domain: "TestDomain", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: "Test operation failed"
-        ])
-
-        let result: Result<String, PostgresError>
-        do {
-            _ = try { throw testError }()
-            result = .success("success")
-        } catch {
-            let postgresError: PostgresError
-            if let psqLError = error as? PSQLError {
-                postgresError = PostgresError(from: psqLError)
-            } else {
-                postgresError = PostgresError(message: error.localizedDescription, originalError: nil)
-            }
-            result = .failure(postgresError)
-        }
-
-        switch result {
-        case .success:
-            XCTFail("Expected failure")
-        case .failure(let error):
-            XCTAssertEqual(error.message, "Test operation failed")
-            XCTAssertFalse(error.isConstraintViolation)
-        }
-    }
 }

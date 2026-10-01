@@ -1,22 +1,35 @@
 import Foundation
 import Logging
-import Metrics
-import NIOConcurrencyHelpers
-import PostgresWire
-import PostgresNIO
+import PGLibpq
+import Synchronization
 
-/// Primary high-level client for PostgreSQL interaction.
+/// Primary high-level client for PostgreSQL: a small pool of libpq connections to one database,
+/// with typed APIs for metadata, administration, security and the rest (``metadata``, ``admin`` …).
 ///
-/// Use this client to manage connections, execute queries, and perform database administration.
-public final class PostgresClient: @unchecked Sendable {
-    internal let wire: PostgresWireClient
-    internal let logger: Logger
-    private let registry = PreparedRegistry()
-    private let notifierBox = NIOLockedValueBox<PostgresNotifier?>(nil)
+/// Each call leases a connection for its duration. For `BEGIN … COMMIT`, `SET`, temporary tables
+/// and other session state use ``withTransaction(isolation:readOnly:_:)`` or a
+/// ``PostgresSessionConnection``.
+public final class PostgresClient: Sendable {
+    let pool: PostgresPool
+    let logger: Logger
+    private let host: Mutex<PostgresHost>
+    private let notifierBox = Mutex<PostgresNotifier?>(nil)
+    private let monitorBox = Mutex<PostgresActivityMonitor?>(nil)
+    let typeNameCache = Mutex<[UInt32: String]>([:])
+
+    /// The activity monitor (it keeps the last snapshot to compute rates), created on first use.
+    var activityMonitor: PostgresActivityMonitor {
+        monitorBox.withLock { box in
+            if let monitor = box { return monitor }
+            let monitor = PostgresActivityMonitor(client: self)
+            box = monitor
+            return monitor
+        }
+    }
 
     /// LISTEN/NOTIFY support, created on first use. It references this client weakly.
-    internal var notifierActor: PostgresNotifier {
-        notifierBox.withLockedValue { box in
+    var notifierActor: PostgresNotifier {
+        notifierBox.withLock { box in
             if let notifier = box { return notifier }
             let notifier = PostgresNotifier(client: self, logger: logger)
             box = notifier
@@ -24,75 +37,136 @@ public final class PostgresClient: @unchecked Sendable {
         }
     }
 
-    private init(wire: PostgresWireClient, logger: Logger) {
-        self.wire = wire
+    private init(pool: PostgresPool, host: PostgresHost, logger: Logger) {
+        self.pool = pool
+        self.host = Mutex(host)
         var logger = logger
         logger[metadataKey: "component"] = "PostgresClient"
         self.logger = logger
     }
 
-    deinit { wire.close() }
+    deinit {
+        let pool = self.pool
+        Task(name: "postgres-client-close") { await pool.close() }
+    }
 
-    /// Establish a connection to the database.
+    /// Connects (one connection is opened now, so a wrong address or password fails here).
     public static func connect(
         configuration: PostgresConfiguration,
         logger: Logger = .init(label: "postgres-kit")
     ) async throws -> PostgresClient {
-        let result: Result<PostgresClient, PostgresError> = await PostgresClient.executeWithEnhancedError {
-            let wire = try await PostgresWireClient.connect(configuration: configuration.makeWireConfiguration(), logger: logger)
-            return PostgresClient(wire: wire, logger: logger)
+        let pool = PostgresPool(configuration: configuration, logger: logger)
+        let first = try await pool.lease()
+        await pool.release(first)
+        let client = PostgresClient(pool: pool, host: await pool.currentHost, logger: logger)
+        let changes = await pool.hostChanges()
+        Task(name: "postgres-client-host") { [weak client] in
+            for await change in changes { client?.host.withLock { $0 = change.to } }
         }
-        switch result {
-        case .success(let client):
-            return client
-        case .failure(let error):
-            throw error
-        }
+        return client
     }
 
-    /// Explicitly close all connections.
-    public func close() { wire.close() }
+    /// Closes every connection. Calls after this fail.
+    public func close() {
+        let pool = self.pool
+        Task(name: "postgres-client-close") { await pool.close() }
+    }
 
-    /// The server this client's pool is connected to now. With several configured hosts it can
-    /// change after a failover; ``hostChanges()`` reports each change.
-    public var currentHost: PostgresHost { wire.currentHost }
+    /// Closes every connection and waits until they are closed.
+    public func shutdown() async {
+        await pool.close()
+    }
+
+    /// The server this client's connections reach now. With several configured hosts it can change
+    /// after a failover; ``hostChanges()`` reports each change.
+    public var currentHost: PostgresHost { host.withLock { $0 } }
 
     /// Reports each time the pool fails over to another configured host.
-    public func hostChanges() -> AsyncStream<PostgresHostChange> { wire.hostChanges() }
+    public func hostChanges() -> AsyncStream<PostgresHostChange> {
+        let (stream, continuation) = AsyncStream<PostgresHostChange>.makeStream(bufferingPolicy: .bufferingNewest(8))
+        let pool = self.pool
+        let relay = Task(name: "postgres-client-host-changes") {
+            for await change in await pool.hostChanges() { continuation.yield(change) }
+            continuation.finish()
+        }
+        continuation.onTermination = { _ in relay.cancel() }
+        return stream
+    }
 
-    /// Connects to every configured host and reports whether each is a primary or a standby (for a
-    /// connection test with several servers). Errors are translated like ``connect(configuration:logger:)``'s.
+    /// Connects to every configured host at once and reports whether each is a primary or a
+    /// standby (for a connection test with several servers). Each connection is closed again.
     public static func probeHosts(
         configuration: PostgresConfiguration,
         logger: Logger = .init(label: "postgres-kit")
     ) async -> [PostgresHostProbe] {
-        await PostgresWireClient.probeHosts(configuration: configuration.makeWireConfiguration(), logger: logger)
-    }
-
-    /// Borrow a single connection for multi-step operations (e.g., transactions).
-    public func withConnection<T>(
-        _ body: @Sendable (PostgresConnection) async throws -> T
-    ) async throws -> T {
+        let hosts = [PostgresHost(host: configuration.host, port: configuration.port)] + configuration.additionalHosts
+        let password: String?
         do {
-            return try await wire.withConnection { connection in
-                let cache = await registry.statementCache(for: connection.connectionID)
-                let serverCache = await registry.serverPreparedCache(for: connection.connectionID)
-                return try await body(PostgresConnection(wireConnection: connection, logger: logger, cache: cache, serverCache: serverCache))
-            }
+            password = try await PostgresPool.password(for: configuration)
         } catch {
-            // Translate driver errors; errors thrown by `body` itself pass through unchanged.
-            throw PostgresKit.PostgresError.fromDriver(error)
+            return hosts.map { PostgresHostProbe(host: $0, role: nil, error: PostgresError.from(error), elapsed: .zero) }
+        }
+        return await withTaskGroup(of: (Int, PostgresHostProbe).self) { group in
+            for (index, host) in hosts.enumerated() {
+                group.addTask {
+                    let clock = ContinuousClock(), start = clock.now
+                    var single = configuration
+                    single.host = host.host
+                    single.port = host.port
+                    single.additionalHosts = []
+                    single.targetSessionAttributes = .any
+                    single.loadBalanceHosts = false
+                    do {
+                        let setup = try await single.libpqSetup(password: password)
+                        let connection = try await PGConnection.connect(setup.parameters, timeout: .seconds(max(2, single.connectTimeout)))
+                        defer { Task { await connection.close() } }
+                        let inRecovery = try await connection.execute("SELECT pg_is_in_recovery()").first?.string(row: 0, column: 0)
+                        withExtendedLifetime(setup) {}
+                        return (index, PostgresHostProbe(host: host, role: inRecovery == "t" ? .standby : .primary, error: nil, elapsed: clock.now - start))
+                    } catch {
+                        return (index, PostgresHostProbe(host: host, role: nil, error: PostgresError.from(error), elapsed: clock.now - start))
+                    }
+                }
+            }
+            var probes: [(Int, PostgresHostProbe)] = []
+            for await probe in group { probes.append(probe) }
+            return probes.sorted { $0.0 < $1.0 }.map(\.1)
         }
     }
 
-    /// Run `body` inside `BEGIN … COMMIT` on one leased connection.
+    /// Borrows one connection for several steps. Rows returned from `body` unread keep the
+    /// connection until they have been read (or dropped).
+    public func withConnection<T>(
+        _ body: (PostgresConnection) async throws -> T
+    ) async throws -> T {
+        let lease = try await pool.lease()
+        let connection = PostgresConnection(connection: lease.connection, logger: logger)
+        do {
+            let result = try await body(connection)
+            // Rows returned from `body` and not read yet keep the connection until they are.
+            if let unread = connection.lastRows.withLock({ $0.stream }), !unread.isFinished {
+                let pool = self.pool
+                await unread.whenFinished { error in
+                    await pool.release(lease, reusable: !((error.map(PostgresError.from))?.isConnectionLost ?? false))
+                }
+                return result
+            }
+            await pool.release(lease)
+            return result
+        } catch {
+            await pool.release(lease, reusable: !((error as? PostgresError)?.isConnectionLost ?? false))
+            throw PostgresError.fromDriver(error)
+        }
+    }
+
+    /// Runs `body` inside `BEGIN … COMMIT` on one leased connection.
     ///
     /// Commits when `body` returns and rolls back when it throws (including cancellation). Every
     /// statement inside `body` must use the `connection` it is given — the client itself is a pool.
     public func withTransaction<T>(
         isolation: PostgresIsolationLevel? = nil,
         readOnly: Bool = false,
-        _ body: @Sendable (PostgresConnection) async throws -> T
+        _ body: (PostgresConnection) async throws -> T
     ) async throws -> T {
         try await withConnection { connection in
             var begin = "BEGIN"
@@ -110,92 +184,64 @@ public final class PostgresClient: @unchecked Sendable {
         }
     }
 
+    /// Runs one statement on a leased connection and streams its rows; the connection goes back
+    /// to the pool when the rows have been read (or dropped).
+    public func query(_ sql: String, binds: [PostgresBind] = []) async throws -> PostgresRows {
+        let lease = try await pool.lease()
+        let pool = self.pool
+        do {
+            if binds.isEmpty {
+                try await lease.connection.send(sql)
+            } else {
+                try await lease.connection.send(sql, parameters: binds.map(\.parameter))
+            }
+        } catch {
+            await pool.release(lease, reusable: false)
+            throw PostgresError.from(error)
+        }
+        let stream = PostgresResultStream(connection: lease.connection, completion: { _, error, _ in
+            await pool.release(lease, reusable: !((error as? PostgresError)?.isConnectionLost ?? false))
+        })
+        try await stream.awaitFirstResult()
+        return PostgresRows(stream: stream)
+    }
+
     /// Ask the server to cancel what backend `pid` is running (`pg_cancel_backend`).
     ///
     /// - Returns: `false` when the server did not signal the backend (for example, it no longer exists).
     @discardableResult
     public func cancelBackend(pid: Int32) async throws -> Bool {
-        do {
-            return try await wire.cancelBackend(pid: pid)
-        } catch {
-            throw PostgresError.from(error)
+        try await withConnection { connection in
+            let rows = try await connection.query("SELECT pg_cancel_backend($1)", binds: [.int32(pid)])
+            for try await signalled in rows.decode(Bool.self) { return signalled }
+            return false
         }
     }
 
-    /// Internal helper to convert values to wire format.
-    internal func toPGData(value: Any) throws -> PGData {
-        if let encodable = value as? PostgresEncodable {
-            var data = PGData(type: encodable.pgDataType)
-            try encodable.encode(into: &data)
-            return data
-        } else {
-            throw PostgresError.encodingError(type: type(of: value))
-        }
+    /// A value as a statement parameter.
+    func bind(_ value: Any) throws -> PostgresBind {
+        guard let encodable = value as? any PostgresEncodable else { throw PostgresError.encodingError(type: type(of: value)) }
+        return try encodable.postgresBind()
     }
 
-    /// Execute a DDL statement and return the number of affected rows.
+    /// Runs a statement and returns the number of rows it returned.
     @discardableResult
-    internal func executeDDL(_ sql: String) async throws -> Int {
-        let rows = try await wire.query(WireQuery(sql: sql))
-        var count = 0
-        for try await _ in rows.decode((String?).self) {
-            count += 1
-        }
-        return count
+    func executeDDL(_ sql: String) async throws -> Int {
+        try await withConnection { try await $0.executeDDL(sql) }
     }
 
-    /// Quote an identifier to prevent SQL injection.
-    /// Handles schema-qualified names like "app.users" → "app"."users".
-    internal func quoteIdentifier(_ identifier: String) -> String {
+    /// Quote an identifier; schema-qualified names like "app.users" become "app"."users".
+    func quoteIdentifier(_ identifier: String) -> String {
         PostgresQuoting.quoteQualifiedIdentifier(identifier)
     }
 
     /// Quote a single identifier (no schema splitting).
-    internal func quoteSimpleIdentifier(_ identifier: String) -> String {
+    func quoteSimpleIdentifier(_ identifier: String) -> String {
         PostgresQuoting.quoteIdentifier(identifier)
     }
 
-    /// Quote a literal string to prevent SQL injection.
-    internal func quoteLiteral(_ literal: String) -> String {
+    /// Quote a literal string.
+    func quoteLiteral(_ literal: String) -> String {
         PostgresQuoting.quoteLiteral(literal)
-    }
-}
-
-// MARK: - Internal Registry
-
-/// Per-connection caches keyed by the pool's connection ID (unique for the pool's lifetime).
-///
-/// The pool does not report closed connections, so the registry keeps the most recently used
-/// `capacity` connections and drops the oldest beyond that.
-private actor PreparedRegistry {
-    private let capacity = 64
-    private var stmtCaches: [Int: StatementCache] = [:]
-    private var serverCaches: [Int: PreparedServerCache] = [:]
-    private var order: [Int] = []
-
-    private func touch(_ id: Int) {
-        if let index = order.firstIndex(of: id) { order.remove(at: index) }
-        order.append(id)
-        while order.count > capacity {
-            let evicted = order.removeFirst()
-            stmtCaches[evicted] = nil
-            serverCaches[evicted] = nil
-        }
-    }
-
-    func statementCache(for id: Int) -> StatementCache {
-        touch(id)
-        if let cache = stmtCaches[id] { return cache }
-        let new = StatementCache(capacity: 256)
-        stmtCaches[id] = new
-        return new
-    }
-
-    func serverPreparedCache(for id: Int) -> PreparedServerCache {
-        touch(id)
-        if let cache = serverCaches[id] { return cache }
-        let new = PreparedServerCache(capacity: 128)
-        serverCaches[id] = new
-        return new
     }
 }

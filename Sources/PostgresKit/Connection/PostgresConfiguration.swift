@@ -13,7 +13,7 @@ public struct PostgresPoolConfiguration: Sendable, Equatable {
     /// Interval of the keep-alive query on idle pooled connections, `nil` to disable.
     public var keepAliveSeconds: Int?
 
-    public init(minimum: Int = 0, maximum: Int = 20, idleTimeoutSeconds: Int = 60, keepAliveSeconds: Int? = 30) {
+    public init(minimum: Int = 0, maximum: Int = 4, idleTimeoutSeconds: Int = 60, keepAliveSeconds: Int? = 30) {
         self.minimum = minimum
         self.maximum = maximum
         self.idleTimeoutSeconds = idleTimeoutSeconds
@@ -138,42 +138,5 @@ public struct PostgresConfiguration: Sendable {
             pool: pool,
             connectTimeout: connectTimeout
         )
-    }
-}
-
-extension PostgresConfiguration {
-    public func makeWireConfiguration() -> PostgresWireConfiguration {
-        var configuration = PostgresWireConfiguration(
-            host: host,
-            port: port,
-            username: username,
-            password: password,
-            database: database,
-            sslMode: sslMode,
-            sslRootCertPath: sslRootCertPath,
-            sslCertPath: sslCertPath,
-            sslKeyPath: sslKeyPath,
-            applicationName: applicationName,
-            connectTimeout: connectTimeout,
-            unixSocketPath: unixSocketPath,
-            pool: PostgresWirePoolOptions(
-                minimumConnections: pool.minimum,
-                maximumConnections: pool.maximum,
-                idleTimeout: .seconds(pool.idleTimeoutSeconds),
-                keepAliveFrequency: pool.keepAliveSeconds.map { .seconds($0) }
-            ),
-            statementTimeout: statementTimeout,
-            lockTimeout: lockTimeout,
-            idleInTransactionSessionTimeout: idleInTransactionSessionTimeout,
-            additionalStartupParameters: additionalStartupParameters,
-            additionalHosts: additionalHosts,
-            targetSessionAttributes: targetSessionAttributes,
-            loadBalanceHosts: loadBalanceHosts,
-            passwordProvider: passwordProvider
-        )
-        configuration.sslKeyPassword = sslKeyPassword
-        configuration.kerberosServiceName = kerberosServiceName
-        configuration.kerberosServiceHost = kerberosServiceHost
-        return configuration
     }
 }

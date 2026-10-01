@@ -1,12 +1,9 @@
-import PostgresNIO
-
 /// Detailed debugging information for PostgreSQL errors.
 public struct PostgresErrorDebugInfo: CustomStringConvertible, Sendable {
     public let message: String
     public let sqlState: String?
     public let severity: String?
     public let serverInfo: [String: String]
-    public let originalError: PSQLError?
 
     /// Constraint name associated with the error, if available.
     public var constraintName: String? { serverInfo["constraintName"] }
