@@ -32,7 +32,7 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testIPAddressV4_EncodeAndQueryRoundTrip() async throws {
         let ip = IPAddress(string: "192.168.1.100")
-        let encoded = try ip.postgresBind()
+        let encoded = ip.postgresBind()
 
         let result = try await client.withConnection { conn in
             try await conn.query("SELECT $1::inet::text AS addr", binds: [encoded])
@@ -46,7 +46,7 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testIPAddressV6_EncodeAndQueryRoundTrip() async throws {
         let ip = IPAddress(string: "::1")
-        let encoded = try ip.postgresBind()
+        let encoded = ip.postgresBind()
 
         let result = try await client.withConnection { conn in
             try await conn.query("SELECT $1::inet::text AS addr", binds: [encoded])
@@ -58,7 +58,7 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testIPAddressCIDR_EncodeAndQueryRoundTrip() async throws {
         let ip = IPAddress(string: "10.0.0.0/8")
-        let encoded = try ip.postgresBind()
+        let encoded = ip.postgresBind()
 
         let result = try await client.withConnection { conn in
             try await conn.query("SELECT $1::inet::text AS addr", binds: [encoded])
@@ -158,7 +158,7 @@ final class EncodableRoundTripTests: PostgresKitTestCase {
 
     func testMultipleEncodableTypesInQuery() async throws {
         let ip = IPAddress(string: "192.168.0.1")
-        let encodedIP = try ip.postgresBind()
+        let encodedIP = ip.postgresBind()
 
         let result = try await client.withConnection { conn in
             try await conn.query(

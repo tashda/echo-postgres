@@ -3,7 +3,7 @@ import Foundation
 /// A Swift type a column's text can be read as (`row.decode((String, Int?).self)`).
 ///
 /// Values arrive as the server's text (`DateStyle=ISO`, `IntervalStyle=postgres`).
-public protocol PostgresTextDecodable {
+public protocol PostgresTextDecodable: SendableMetatype {
     /// Reads a non-NULL value.
     static func decode(text: String) throws -> Self
     /// Reads SQL NULL: an error, except for optionals.

@@ -24,6 +24,8 @@ public actor PGConnection {
     let noticeBox = PGNoticeBox()
     private var noticeContext: Unmanaged<PGNoticeBox>?
     var pendingNotifications: [PGNotification] = []
+    /// Socket waits in progress (a closing connection ends them first).
+    var activeWaits: [ObjectIdentifier: PGSocketWait] = [:]
     /// A statement was sent and its results haven't all been read.
     public internal(set) var isBusy = false
 
@@ -47,9 +49,26 @@ public actor PGConnection {
         return connection
     }
 
-    /// Closes the connection. Safe to call twice.
-    public func close() {
+    /// Closes the connection, also while a statement is waiting on the socket (that wait ends with
+    /// `connectionLost`). Safe to call twice.
+    public func close() async {
+        let waits = Array(activeWaits.values)
+        activeWaits.removeAll()
+        for wait in waits {
+            await wait.abort(with: PGConnectionError(.connectionLost, message: "The connection was closed."))
+        }
         closeHandle()
+    }
+
+    /// Whether the connection is still usable, checked without waiting: an idle connection reads
+    /// what the socket has, which tells whether the server closed it.
+    public func isAlive() -> Bool {
+        guard let handle else { return false }
+        if !isBusy, activeWaits.isEmpty {
+            if PQconsumeInput(handle) == 0 { return false }
+            collectNotifications()
+        }
+        return PQstatus(handle) == CONNECTION_OK
     }
 
     public var isOpen: Bool {
@@ -119,7 +138,13 @@ public actor PGConnection {
         guard let handle else { throw PGConnectionError(.notReady, message: "The connection is closed.") }
         let socket = PQsocket(handle)
         guard socket >= 0 else { throw PGConnectionError(.connectionLost, message: errorMessage) }
-        return try await PGSocketWait.wait(socket: socket, for: events, on: queue, deadline: deadline)
+        let wait = PGSocketWait()
+        let id = ObjectIdentifier(wait)
+        activeWaits[id] = wait
+        defer { activeWaits[id] = nil }
+        let ready = try await wait.run(socket: socket, for: events, on: queue, deadline: deadline)
+        guard self.handle != nil else { throw PGConnectionError(.connectionLost, message: "The connection was closed.") }
+        return ready
     }
 
     func installNoticeReceiver() {

@@ -129,6 +129,26 @@ struct PGConnectionTests {
         }
     }
 
+    /// Force Stop: closing while a statement waits on the socket ends the wait at once (the
+    /// socket is released by Dispatch before libpq closes it).
+    @Test func closeWhileAStatementWaits() async throws {
+        let connection = try await LabServer.connect()
+        try await connection.send("SELECT pg_sleep(30)")
+        let reader = Task { try await connection.nextResult() }
+        try await Task.sleep(for: .milliseconds(300))
+        let started = ContinuousClock.now
+        await connection.close()
+        do {
+            _ = try await reader.value
+            Issue.record("the read did not end")
+        } catch let error as PGConnectionError {
+            #expect(error.kind == .connectionLost)
+        }
+        #expect(ContinuousClock.now - started < .seconds(2))
+        #expect(await !connection.isOpen)
+        #expect(await !connection.isAlive())
+    }
+
     @Test func taskCancellationWhileWaitingThrows() async throws {
         let connection = try await LabServer.connect()
         defer { Task { await connection.close() } }

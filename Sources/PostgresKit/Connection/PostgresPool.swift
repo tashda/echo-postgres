@@ -51,8 +51,11 @@ actor PostgresPool {
             closeExpiredIdle()
             if let entry = idle.popLast() {
                 leased += 1
-                if ContinuousClock.now - entry.since < Self.checkAfterIdle { return entry.lease }
-                if await Self.isHealthy(entry.lease.connection) { return entry.lease }
+                // A server that closed the connection (it stopped, or failed over) is noticed here,
+                // before anything is sent; a new connection then lets libpq choose the host again.
+                let alive = await entry.lease.connection.isAlive()
+                if alive, ContinuousClock.now - entry.since < Self.checkAfterIdle { return entry.lease }
+                if alive, await Self.isHealthy(entry.lease.connection) { return entry.lease }
                 leased -= 1
                 await entry.lease.connection.close()
                 continue

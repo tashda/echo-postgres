@@ -22,7 +22,7 @@ public struct PostgresRows: AsyncSequence, Sendable {
 
     /// Reads each row as the given types (`rows.decode((String, Int?).self)`).
     public func decode<each T: PostgresTextDecodable>(_ type: (repeat each T).Type) -> AsyncThrowingMapSequence<PostgresRows, (repeat each T)> {
-        map { row in try row.decode(type) }
+        map { row in try row.decode((repeat each T).self) }
     }
 
     /// Reads each row's first column as `type`.

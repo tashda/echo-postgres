@@ -32,6 +32,8 @@ final class PGSocketWait: Sendable {
         var outcome: Result<PGSocketReadiness, any Error>?
         var sources: [any DispatchSourceProtocol] = []
         var pendingCancels = 0
+        var released = false
+        var releaseWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
     private let state = Mutex(State())
@@ -44,7 +46,16 @@ final class PGSocketWait: Sendable {
         on queue: DispatchSerialQueue,
         deadline: ContinuousClock.Instant?
     ) async throws -> PGSocketReadiness {
-        let wait = PGSocketWait()
+        try await PGSocketWait().run(socket: socket, for: events, on: queue, deadline: deadline)
+    }
+
+    func run(
+        socket: Int32,
+        for events: PGSocketReadiness,
+        on queue: DispatchSerialQueue,
+        deadline: ContinuousClock.Instant?
+    ) async throws -> PGSocketReadiness {
+        let wait = self
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 wait.start(continuation, socket: socket, events: events, queue: queue, deadline: deadline)
@@ -104,14 +115,33 @@ final class PGSocketWait: Sendable {
         }
     }
 
+    /// Ends the wait with `error` (the connection is closing) and returns once Dispatch has let go
+    /// of the descriptor, so it can be closed.
+    func abort(with error: any Error) async {
+        finish(.failure(error))
+        await withCheckedContinuation { continuation in
+            let releasedAlready = state.withLock { state -> Bool in
+                if state.released || state.sources.isEmpty && state.continuation == nil { return true }
+                state.releaseWaiters.append(continuation)
+                return false
+            }
+            if releasedAlready { continuation.resume() }
+        }
+    }
+
     private func cancelled() {
-        let ready = state.withLock { state -> (CheckedContinuation<PGSocketReadiness, any Error>, Result<PGSocketReadiness, any Error>)? in
+        let ready = state.withLock { state -> (CheckedContinuation<PGSocketReadiness, any Error>, Result<PGSocketReadiness, any Error>, [CheckedContinuation<Void, Never>])? in
             state.pendingCancels -= 1
             guard state.pendingCancels == 0, let continuation = state.continuation, let outcome = state.outcome else { return nil }
             state.continuation = nil
             state.sources = []
-            return (continuation, outcome)
+            state.released = true
+            defer { state.releaseWaiters.removeAll() }
+            return (continuation, outcome, state.releaseWaiters)
         }
-        if let (continuation, outcome) = ready { continuation.resume(with: outcome) }
+        if let (continuation, outcome, waiters) = ready {
+            continuation.resume(with: outcome)
+            waiters.forEach { $0.resume() }
+        }
     }
 }
