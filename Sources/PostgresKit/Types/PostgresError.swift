@@ -127,6 +127,18 @@ public struct PostgresError: Error, CustomStringConvertible, Sendable {
                              connectionProblem: connectionProblem, isConnectionError: isConnectionError)
     }
 
+    /// Where the error happened inside server code (`PL/pgSQL function f() line 3 at RAISE`).
+    public var context: String? { serverInfo?["locationContext"] }
+    /// The query an error inside server code came from (with ``internalPosition``).
+    public var internalQuery: String? { serverInfo?["internalQuery"] }
+    public var schemaName: String? { serverInfo?["schemaName"] }
+    public var tableName: String? { serverInfo?["tableName"] }
+    public var columnName: String? { serverInfo?["columnName"] }
+    public var dataTypeName: String? { serverInfo?["dataTypeName"] }
+    public var constraintName: String? { serverInfo?["constraintName"] }
+    /// The server function that raised the error (`ExecConstraints` …).
+    public var routine: String? { serverInfo?["routine"] }
+
     /// Get detailed debugging information.
     public func withDebugging() -> PostgresErrorDebugInfo {
         PostgresErrorDebugInfo(message: message, sqlState: sqlState, severity: severity, serverInfo: serverInfo ?? [:])
