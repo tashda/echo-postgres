@@ -80,6 +80,12 @@ public struct PostgresMaintenanceClient: Sendable {
     init(client: PostgresClient) { self.client = client }
 }
 
+/// pg_cron jobs (the `pg_cron` extension, in the database `cron.database_name` names).
+public struct PostgresCronClient: Sendable {
+    internal let client: PostgresClient
+    init(client: PostgresClient) { self.client = client }
+}
+
 public struct PostgresTransactionClient: Sendable {
     internal let client: PostgresClient
     init(client: PostgresClient) { self.client = client }
@@ -163,4 +169,5 @@ extension PostgresClient {
 
     // Postgres-specific
     public var notifier: PostgresNotifierClient { .init(client: self) }
+    public var cron: PostgresCronClient { .init(client: self) }
 }
