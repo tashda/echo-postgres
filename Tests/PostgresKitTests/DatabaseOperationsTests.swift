@@ -34,4 +34,21 @@ final class DatabaseOperationsTests: PostgresKitTestCase {
         XCTAssertTrue(existsAfter)
         try await client.admin.dropDatabase(name: name)
     }
+
+    /// A unique index built CONCURRENTLY over duplicates fails and stays behind, invalid.
+    func testFailedConcurrentIndexIsInvalid() async throws {
+        let client = try XCTUnwrap(self.client)
+        let table = "dupes_\(UUID().uuidString.prefix(8).lowercased())"
+        _ = try await client.admin.createTable(name: table, schema: "public", columns: [PostgresColumnDefinition(name: "code", dataType: "integer")])
+        _ = try await client.bulk.insert(into: table, schema: "public", columns: ["code"], values: [[.bind(1)], [.bind(1)]])
+        do {
+            _ = try await client.indexes.createAdvancedIndex(name: "\(table)_code", table: table, schema: "public",
+                                                             columns: [PostgresIndexColumn(name: "code")], unique: true, concurrently: true)
+            XCTFail("the unique index should not build over duplicates")
+        } catch {}
+        let index = try await client.metadata.listIndexes(schema: "public", table: table).first { $0.name == "\(table)_code" }
+        XCTAssertEqual(index?.isValid, false)
+        _ = try await client.admin.dropTable(name: table, schema: "public")
+    }
 }
+

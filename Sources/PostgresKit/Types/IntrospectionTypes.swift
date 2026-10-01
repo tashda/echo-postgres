@@ -94,13 +94,17 @@ public struct PostgresIndexInfo: Sendable {
     public let predicate: String?
     /// The index access method (e.g., `"btree"`, `"hash"`, `"gin"`, `"gist"`, `"brin"`).
     public let indexType: String?
+    /// False for an index a failed `CREATE INDEX CONCURRENTLY` left behind: it is kept up to
+    /// date but not used, until it is rebuilt or dropped.
+    public let isValid: Bool
 
-    public init(name: String, isUnique: Bool, columns: [Column], predicate: String?, indexType: String? = nil) {
+    public init(name: String, isUnique: Bool, columns: [Column], predicate: String?, indexType: String? = nil, isValid: Bool = true) {
         self.name = name
         self.isUnique = isUnique
         self.columns = columns
         self.predicate = predicate
         self.indexType = indexType
+        self.isValid = isValid
     }
 }
 

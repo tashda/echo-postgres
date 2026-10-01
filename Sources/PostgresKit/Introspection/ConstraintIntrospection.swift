@@ -170,7 +170,8 @@ public extension PostgresMetadataClient {
             ((ix.indoption[ord.position] & 1) = 1)::text AS is_descending,
             pg_get_expr(ix.indpred, tab.oid)::text AS predicate,
             am.amname::text AS index_type,
-            ix.indnkeyatts::text AS num_key_columns
+            ix.indnkeyatts::text AS num_key_columns,
+            ix.indisvalid::text AS is_valid
         FROM pg_class tab
         JOIN pg_index ix ON tab.oid = ix.indrelid
         JOIN pg_class idx ON idx.oid = ix.indexrelid
@@ -186,8 +187,10 @@ public extension PostgresMetadataClient {
         return try await client.withConnection { conn in
             let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
             var acc: [String: (unique: Bool, cols: [PostgresIndexInfo.Column], predicate: String?, indexType: String?, numKeyColumns: Int)] = [:]
+            var invalid: Set<String> = []
             for row in rows {
-                let (indexName, isUniqueStr, posStr, attname, isDescStr, predicate, indexType, numKeyStr) = try row.decode((String, String, String, String?, String?, String?, String?, String?).self)
+                let (indexName, isUniqueStr, posStr, attname, isDescStr, predicate, indexType, numKeyStr, isValidStr) = try row.decode((String, String, String, String?, String?, String?, String?, String?, String).self)
+                if isValidStr == "false" || isValidStr == "f" { invalid.insert(indexName) }
                 let isUnique = isUniqueStr == "true" || isUniqueStr == "t"
                 let position = Int(posStr) ?? 0
                 let numKeyColumns = Int(numKeyStr ?? "0") ?? 0
@@ -202,7 +205,10 @@ public extension PostgresMetadataClient {
                 entry.indexType = indexType
                 acc[indexName] = entry
             }
-            return acc.sorted { $0.key < $1.key }.map { name, e in PostgresIndexInfo(name: name, isUnique: e.unique, columns: e.cols, predicate: e.predicate, indexType: e.indexType) }
+            return acc.sorted { $0.key < $1.key }.map { name, e in
+                PostgresIndexInfo(name: name, isUnique: e.unique, columns: e.cols, predicate: e.predicate, indexType: e.indexType,
+                                  isValid: !invalid.contains(name))
+            }
         }
     }
 

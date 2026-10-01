@@ -52,11 +52,14 @@ public extension PostgresIndexClient {
         include: [String] = [],
         whereClause: String? = nil,
         tablespace: String? = nil,
-        nullsDistinct: Bool = true
+        nullsDistinct: Bool = true,
+        concurrently: Bool = false
     ) async throws -> Int {
         var parts: [String] = ["CREATE"]
         if unique { parts.append("UNIQUE") }
         parts.append("INDEX")
+        // Without blocking writes; not inside a transaction. A failure leaves the index invalid.
+        if concurrently { parts.append("CONCURRENTLY") }
         if ifNotExists { parts.append("IF NOT EXISTS") }
         parts.append(client.quoteIdentifier(name))
         parts.append("ON \(client.quoteQualified(table, schema: schema))")
