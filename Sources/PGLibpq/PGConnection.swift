@@ -17,8 +17,8 @@ import Dispatch
 /// holds no thread. While one call is suspended on the socket, others can run (a cancel during a
 /// query, for example).
 public actor PGConnection {
-    private let queue: DispatchSerialQueue
-    var executorQueue: DispatchSerialQueue { queue }
+    private let queue: PGConnectionQueue
+    var executorQueue: PGConnectionQueue { queue }
     var handle: OpaquePointer?
     /// Notices (RAISE NOTICE, warnings) since the last `takeNotices()`.
     let noticeBox = PGNoticeBox()
@@ -29,12 +29,14 @@ public actor PGConnection {
     /// A statement was sent and its results haven't all been read.
     public internal(set) var isBusy = false
 
+    #if canImport(Darwin)
     public nonisolated var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()
     }
+    #endif
 
     public init(label: String = "PGConnection") {
-        queue = DispatchSerialQueue(label: label)
+        queue = PGConnectionQueue(label: label)
     }
 
     isolated deinit {

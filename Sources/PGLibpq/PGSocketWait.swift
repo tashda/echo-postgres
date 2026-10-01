@@ -9,6 +9,15 @@ import Darwin
 import Glibc
 #endif
 import Dispatch
+
+/// The connection's queue (decision D10): on Apple platforms also the actor's executor, so libpq
+/// is only touched there; Linux's Dispatch has no serial-queue executor, so there the actor keeps
+/// its default executor and the queue only runs the socket sources.
+#if canImport(Darwin)
+typealias PGConnectionQueue = DispatchSerialQueue
+#else
+typealias PGConnectionQueue = DispatchQueue
+#endif
 import Synchronization
 
 /// What a connection waits for on its socket.
@@ -43,7 +52,7 @@ final class PGSocketWait: Sendable {
     static func wait(
         socket: Int32,
         for events: PGSocketReadiness,
-        on queue: DispatchSerialQueue,
+        on queue: PGConnectionQueue,
         deadline: ContinuousClock.Instant?
     ) async throws -> PGSocketReadiness {
         try await PGSocketWait().run(socket: socket, for: events, on: queue, deadline: deadline)
@@ -52,7 +61,7 @@ final class PGSocketWait: Sendable {
     func run(
         socket: Int32,
         for events: PGSocketReadiness,
-        on queue: DispatchSerialQueue,
+        on queue: PGConnectionQueue,
         deadline: ContinuousClock.Instant?
     ) async throws -> PGSocketReadiness {
         let wait = self
@@ -69,7 +78,7 @@ final class PGSocketWait: Sendable {
         _ continuation: CheckedContinuation<PGSocketReadiness, any Error>,
         socket: Int32,
         events: PGSocketReadiness,
-        queue: DispatchSerialQueue,
+        queue: PGConnectionQueue,
         deadline: ContinuousClock.Instant?
     ) {
         // The sources live only inside the lock; making, starting and cancelling them never

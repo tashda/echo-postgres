@@ -22,6 +22,9 @@ struct PostgresTLSCertificateCheckTests {
     private func attempt(_ mode: PostgresSSLMode) async -> Bool {
         guard var configuration = TestServer.current?.configuration else { return false }
         configuration.sslMode = mode
+        // With a CA file, libpq's `require` checks the chain like verify-ca (documented, for
+        // compatibility); Echo sets one only when the user chose it.
+        if mode == .require { configuration.sslRootCertPath = nil }
         do {
             let setup = try await configuration.libpqSetup(password: configuration.password)
             let connection = try await PGConnection.connect(setup.parameters, timeout: .seconds(15))
