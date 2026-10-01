@@ -1,16 +1,14 @@
 import Foundation
 import Logging
 @testable import PostgresKit
+import PostgresKitTesting
 import Testing
 
 /// Objects created in a named schema, procedures, exact row counts and insert counts.
-@Suite(.enabled(if: TestEnv.isConfigured))
+@Suite(.testServer)
 struct SchemaQualifiedObjectsTests {
     private func connect() async throws -> PostgresClient {
-        try await PostgresClient.connect(configuration: PostgresConfiguration(
-            host: TestEnv.host, port: TestEnv.port, database: TestEnv.database,
-            username: TestEnv.username, password: TestEnv.password, useTLS: TestEnv.useTLS
-        ))
+        try await PostgresClient.connect(configuration: try #require(TestServer.current).configuration)
     }
 
     @Test func createsEveryObjectInANamedSchema() async throws {
@@ -132,20 +130,33 @@ struct SchemaQualifiedObjectsTests {
         _ = try await client.admin.createSchema(name: schema)
         _ = try await client.security.createRole(name: group)
         _ = try await client.security.createRole(name: reader, login: true)
-        defer {
-            Task {
-                _ = try? await client.admin.dropSchema(name: schema, ifExists: true, cascade: true)
-                try? await client.security.dropOwned(by: reader)
-                _ = try? await client.security.dropRole(name: reader, ifExists: true)
-                _ = try? await client.security.dropRole(name: group, ifExists: true)
-            }
+        do {
+            try await grantAndCheck(client, schema: schema, reader: reader, group: group)
+        } catch {
+            await dropGrantObjects(client, schema: schema, reader: reader, group: group)
+            throw error
         }
+        await dropGrantObjects(client, schema: schema, reader: reader, group: group)
+    }
+
+    /// Removes what the grants test made, before its client closes.
+    private func dropGrantObjects(_ client: PostgresClient, schema: String, reader: String, group: String) async {
+        _ = try? await client.admin.dropSchema(name: schema, ifExists: true, cascade: true)
+        try? await client.security.dropOwned(by: reader)
+        _ = try? await client.security.dropRole(name: reader, ifExists: true)
+        _ = try? await client.security.dropRole(name: group, ifExists: true)
+    }
+
+    private func grantAndCheck(_ client: PostgresClient, schema: String, reader: String, group: String) async throws {
         _ = try await client.admin.createTable(name: "salaries", schema: schema, columns: [
             PostgresColumnDefinition(name: "employee", dataType: "text"),
             PostgresColumnDefinition(name: "salary", dataType: "numeric"),
             PostgresColumnDefinition(name: "region", dataType: "text"),
         ])
-        _ = try await client.security.grantRole(role: group, to: reader, inherit: true)
+        // GRANT … WITH INHERIT is PostgreSQL 16+; earlier servers get the plain grant.
+        let version = try await client.simpleQueryResult("SHOW server_version_num").rows.first.flatMap { $0.first }
+            .flatMap { PostgresCellFormatter().stringValue(for: $0) }.flatMap(Int.init) ?? 0
+        _ = try await client.security.grantRole(role: group, to: reader, inherit: version >= 160000 ? true : nil)
         _ = try await client.security.grantPrivileges(privileges: [.select], onTable: "salaries", schema: schema, columns: ["employee", "region"], to: reader)
         _ = try await client.security.grantPrivileges(privileges: [.select], onTable: "salaries", schema: schema, to: "PUBLIC")
         _ = try await client.security.revokePrivileges(privileges: [.select], onTable: "salaries", schema: schema, from: "PUBLIC")

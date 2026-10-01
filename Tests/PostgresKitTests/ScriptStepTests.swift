@@ -1,5 +1,6 @@
 import Foundation
 @testable import PostgresKit
+import PostgresKitTesting
 import Testing
 
 @Suite struct ScriptStepTests {
@@ -37,13 +38,10 @@ import Testing
     }
 }
 
-@Suite(.enabled(if: TestEnv.isConfigured))
+@Suite(.testServer)
 struct ScriptRunTests {
     @Test func runsADumpShapedScript() async throws {
-        let client = try await PostgresClient.connect(configuration: PostgresConfiguration(
-            host: TestEnv.host, port: TestEnv.port, database: TestEnv.database,
-            username: TestEnv.username, password: TestEnv.password, useTLS: TestEnv.useTLS
-        ))
+        let client = try await PostgresClient.connect(configuration: try #require(TestServer.current).configuration)
         defer { client.close() }
         let schema = "dump_" + UUID().uuidString.prefix(8).lowercased()
         defer { Task { _ = try? await client.admin.dropSchema(name: schema, ifExists: true, cascade: true) } }

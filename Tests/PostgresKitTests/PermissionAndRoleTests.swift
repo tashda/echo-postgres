@@ -141,7 +141,10 @@ final class PermissionAndRoleTests: PostgresKitTestCase {
 
     func testCreateAndDropUser() async throws {
         let roleName = uniqueName()
-        defer { Task { [client = self.client!] in _ = try? await client.security.dropUser(name: roleName, ifExists: true) } }
+        addTeardownBlock { [client = self.client!] in
+            try? await client.security.dropOwned(by: roleName)
+            _ = try? await client.security.dropUser(name: roleName, ifExists: true)
+        }
 
         _ = try await client.security.createUser(
             name: roleName,
@@ -169,7 +172,10 @@ final class PermissionAndRoleTests: PostgresKitTestCase {
 
     func testAlterUser() async throws {
         let roleName = uniqueName()
-        defer { Task { [client = self.client!] in _ = try? await client.security.dropUser(name: roleName, ifExists: true) } }
+        addTeardownBlock { [client = self.client!] in
+            try? await client.security.dropOwned(by: roleName)
+            _ = try? await client.security.dropUser(name: roleName, ifExists: true)
+        }
 
         _ = try await client.security.createUser(name: roleName, createDatabase: false, createRole: false, login: false)
 
@@ -187,10 +193,11 @@ final class PermissionAndRoleTests: PostgresKitTestCase {
     func testGrantAndRevokeTablePrivileges() async throws {
         let roleName = uniqueName()
         let table = uniqueName("tbl")
-        defer { Task { [client = self.client!] in
+        addTeardownBlock { [client = self.client!] in
             _ = try? await client.admin.dropTable(name: table, ifExists: true)
+            try? await client.security.dropOwned(by: roleName)
             _ = try? await client.security.dropUser(name: roleName, ifExists: true)
-        }}
+        }
 
         _ = try await client.security.createUser(name: roleName, createDatabase: false, createRole: false, login: false)
         _ = try await client.admin.createTable(name: table, columns: [
@@ -218,10 +225,11 @@ final class PermissionAndRoleTests: PostgresKitTestCase {
     func testGrantMultiplePrivileges() async throws {
         let roleName = uniqueName()
         let table = uniqueName("tbl")
-        defer { Task { [client = self.client!] in
+        addTeardownBlock { [client = self.client!] in
             _ = try? await client.admin.dropTable(name: table, ifExists: true)
+            try? await client.security.dropOwned(by: roleName)
             _ = try? await client.security.dropUser(name: roleName, ifExists: true)
-        }}
+        }
 
         _ = try await client.security.createUser(name: roleName, createDatabase: false, createRole: false, login: false)
         _ = try await client.admin.createTable(name: table, columns: [
@@ -251,10 +259,12 @@ final class PermissionAndRoleTests: PostgresKitTestCase {
     func testGrantAndRevokeRole() async throws {
         let parentRole = uniqueName("parent")
         let childRole = uniqueName("child")
-        defer { Task { [client = self.client!] in
+        addTeardownBlock { [client = self.client!] in
+            try? await client.security.dropOwned(by: childRole)
             _ = try? await client.security.dropUser(name: childRole, ifExists: true)
+            try? await client.security.dropOwned(by: parentRole)
             _ = try? await client.security.dropUser(name: parentRole, ifExists: true)
-        }}
+        }
 
         _ = try await client.security.createUser(name: parentRole, createDatabase: false, createRole: false, login: false)
         _ = try await client.security.createUser(name: childRole, createDatabase: false, createRole: false, login: false)
@@ -290,7 +300,10 @@ final class PermissionAndRoleTests: PostgresKitTestCase {
 
     func testRoleComment() async throws {
         let roleName = uniqueName()
-        defer { Task { [client = self.client!] in _ = try? await client.security.dropUser(name: roleName, ifExists: true) } }
+        addTeardownBlock { [client = self.client!] in
+            try? await client.security.dropOwned(by: roleName)
+            _ = try? await client.security.dropUser(name: roleName, ifExists: true)
+        }
 
         _ = try await client.security.createUser(name: roleName, createDatabase: false, createRole: false, login: false)
         try await client.security.setRoleComment(role: roleName, comment: "Test role for integration tests")

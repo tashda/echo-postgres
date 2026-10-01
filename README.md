@@ -108,71 +108,18 @@ let rows = try await client.query(
 )
 ```
 
-## Integration Testing
+## Testing
 
-Locally, the integration tests run against a disposable PostgreSQL server from
-[echo-server-lab](https://github.com/tashda/echo-server-lab), which is removed when the run ends:
-
-```bash
-Tests/with-lab.sh swift test --filter 'PostgresKitTests|PostgresWireTests'
-```
-
-The suite loads `Tests/PostgresKitTests/Support/SampleData.sql` into the server itself
-(`PostgresLabFixture`). The TLS, Kerberos and failover tests need their own servers on Docker; this
-starts them and removes them afterwards:
+The unit tests need nothing: `swift test`. The integration tests need a PostgreSQL server, which
+they find through a URL variable, and are skipped without it:
 
 ```bash
-Tests/Fixtures/with-fixtures.sh tls kerberos failover -- \
-  swift test --filter 'TLSIntegrationTests|KerberosIntegrationTests|FailoverIntegrationTests'
+docker run -d --name postgres-test -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
+POSTGRES_TEST_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' swift test
 ```
 
-The Docker setup below is what CI uses.
-
-## Integration Testing with Docker
-
-This project includes a lightweight, built-in utility to run integration tests against a live PostgreSQL database managed by Docker.
-
-### Automated Multi-Version Testing
-
-A convenient shell script is provided to test against multiple PostgreSQL versions (14, 15, 16, 17, 18, and `latest`):
-
-```bash
-./test-all-postgres-versions.sh
-```
-
-### Manual Docker Integration
-
-Alternatively, you can run tests against a single Docker instance by setting environment variables:
-
-```bash
-export USE_DOCKER=1
-export POSTGRES_VERSION=16
-swift test --filter PostgresKitTests
-```
-
-When `USE_DOCKER=1` is set:
-1.  The test suite automatically spins up a Docker PostgreSQL container.
-2.  Loads a sample database from `Tests/PostgresKitTests/Support/SampleData.sql`.
-3.  Overrides connection details to point to the temporary Docker container.
-4.  Stops and removes the container after the tests complete.
-
-### TLS and Kerberos servers
-
-Three more fixtures start servers the default one can't cover; their tests are skipped without them:
-
-```bash
-eval "$(Tests/Fixtures/tls/start-server.sh)"        # TLS only: private CA, server and client certificates
-swift test --filter TLSIntegrationTests
-
-eval "$(Tests/Fixtures/kerberos/start-server.sh)"   # Kerberos only, with its own KDC (realm EXAMPLE.TEST)
-swift test --filter KerberosIntegrationTests
-
-eval "$(Tests/Fixtures/failover/start-servers.sh)"  # two servers the tests stop, start and make read-only
-swift test --filter FailoverIntegrationTests
-```
-
-The Kerberos fixture keeps its own `krb5.conf` and ticket cache in `Tests/Fixtures/kerberos/state`;
-your own Kerberos setup and tickets are not used or changed.
+[TESTING.md](TESTING.md) lists every variable (TLS, a standby, failover through a proxy, Kerberos)
+with the `docker run` lines for each setup.
 
 ## Documentation
 

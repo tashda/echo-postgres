@@ -147,9 +147,11 @@ final class GSSAPIAuthenticator: PostgresGSSAuthenticator, @unchecked Sendable {
         if noTicket {
             return (.noTicket, "No Kerberos ticket. Sign in to Kerberos first (kinit, or Ticket Viewer on a Mac).")
         }
-        // MIT: "Server x not found in Kerberos database"; Heimdal (macOS): "LOOKING_UP_SERVER".
+        // MIT: "Server x not found in Kerberos database"; Heimdal (macOS): "LOOKING_UP_SERVER", or with
+        // an Active Directory realm "Server (x) unknown while looking up 'x'".
         if details.contains("not found in kerberos database") || details.contains("server not found")
-            || details.contains("unknown server") || details.contains("looking_up_server") {
+            || details.contains("unknown server") || details.contains("looking_up_server")
+            || details.contains("unknown while looking up") {
             return (.unknownService, "The Kerberos realm does not know the database service \(principal). Check the host name and the service name.")
         }
         if routineError(major) == 11 || details.contains("expired") {

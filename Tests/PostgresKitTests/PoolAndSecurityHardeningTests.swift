@@ -130,7 +130,13 @@ final class PoolAndSecurityHardeningTests: PostgresKitTestCase {
         let role = "hardening_\(UInt32.random(in: 0..<UInt32.max))"
         let password = "it's a \\ \"secret\"; DROP ROLE postgres; --"
         _ = try await client.security.createUser(name: role, password: password, createDatabase: false, createRole: false)
-        defer { Task { [client = client!] in _ = try? await client.security.dropUser(name: role, ifExists: true) } }
+        addTeardownBlock { [client = client!] in
+            // The role's own sessions close with their pool; retry until the server lets it go.
+            for _ in 0..<20 {
+                if (try? await client.security.dropUser(name: role, ifExists: true)) != nil { return }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
 
         let stored = try await scalar(client, "SELECT rolpassword FROM pg_authid WHERE rolname = '\(role)'")
         XCTAssertTrue(stored?.hasPrefix("SCRAM-SHA-256$4096:") == true, "the password is hashed client-side")

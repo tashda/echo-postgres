@@ -85,7 +85,17 @@ extension PostgresWireClient {
             return old
         }
         current.withLockedValue { $0 = opened.configuration }
+        // Leases on the retired pool fail by themselves; give running work a moment, then stop it.
+        Task.detached {
+            try? await Task.sleep(for: .seconds(30))
+            retired.runTask.cancel()
+        }
         let from = "\(previous.host):\(previous.port)", to = "\(opened.configuration.host):\(opened.configuration.port)"
+        guard from != to else {
+            // The same server answers again (one host, or the others still down): a new pool, no move.
+            logger.info("Reconnected to \(to) after: \(String(describing: error))")
+            return
+        }
         logger.warning("Failed over from \(from) to \(to) after: \(String(describing: error))")
         let change = PostgresHostChange(
             from: PostgresHost(host: previous.host, port: previous.port),
@@ -93,11 +103,6 @@ extension PostgresWireClient {
             reason: PostgresServerUnreachableError(previous: previous, underlying: error).errorDescription ?? String(describing: error),
             date: Date())
         for observer in hostObservers.withLockedValue({ Array($0.values) }) { observer.yield(change) }
-        // Leases on the retired pool fail by themselves; give running work a moment, then stop it.
-        Task.detached {
-            try? await Task.sleep(for: .seconds(30))
-            retired.runTask.cancel()
-        }
     }
 }
 

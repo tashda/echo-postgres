@@ -1,80 +1,30 @@
 import Foundation
 import Logging
 import PostgresKit
+import PostgresKitTesting
 
+/// The server for the XCTest suites: `POSTGRES_TEST_URL` (see TESTING.md), with the suite's sample
+/// data in a database of its own (``SampleDatabase``). Nothing is read from `.env` files.
 enum TestEnv {
-    private static let logger = Logger(label: "postgres.wire.tests")
-    /// Loads `.env` from the working directory. With a lab server (`SERVERLAB_CONTAINER`) or
-    /// `USE_DOCKER=1`, `POSTGRES_*` entries are ignored so a `.env` that points at a real server can
-    /// never redirect tests away from the disposable one.
-    static func loadDotEnv() {
-        let dockerManaged = getEnv("USE_DOCKER") == "1" || getEnv("SERVERLAB_CONTAINER") != nil
-        let fm = FileManager.default
-        let cwd = fm.currentDirectoryPath
-        let envPath = (cwd as NSString).appendingPathComponent(".env")
-        guard fm.fileExists(atPath: envPath) else { return }
-        if let content = try? String(contentsOfFile: envPath, encoding: .utf8) {
-            for line in content.split(separator: "\n") {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
-                if let eq = trimmed.firstIndex(of: "=") {
-                    let key = String(trimmed[..<eq])
-                    let value = String(trimmed[trimmed.index(after: eq)...])
-                    if dockerManaged && key.hasPrefix("POSTGRES_") { continue }
-                    setenv(key, value, 1)
-                }
-            }
-        }
-    }
+    static var server: TestServer? { TestServer.url() }
 
-    private static func getEnv(_ key: String) -> String? {
-        // Try getenv first (for setenv compatibility)
-        if let value = getenv(key) {
-            return String(cString: value)
-        }
-        // Fallback to ProcessInfo
-        return ProcessInfo.processInfo.environment[key]
-    }
+    static var isConfigured: Bool { server != nil }
 
-    static var isConfigured: Bool {
-        let host = getEnv("POSTGRES_HOST")
-        let useDocker = getEnv("USE_DOCKER")
-        let configured = host != nil || useDocker == "1"
-        if !configured {
-            logger.warning("TestEnv NOT configured. POSTGRES_HOST: \(host ?? "nil"), USE_DOCKER: \(useDocker ?? "nil")")
-        }
-        return configured
-    }
-
-    static var host: String {
-        getEnv("POSTGRES_HOST") ?? "127.0.0.1"
-    }
-
-    static var port: Int {
-        if let portStr = getEnv("POSTGRES_PORT"),
-           let port = Int(portStr) {
-            return port
-        }
-        return 5432
-    }
-
-    static var username: String {
-        getEnv("POSTGRES_USERNAME") ?? "postgres"
-    }
-
-    static var password: String? {
-        getEnv("POSTGRES_PASSWORD") ?? "postgres"
-    }
-
-    static var database: String {
-        getEnv("POSTGRES_DATABASE") ?? "postgres"
-    }
-
+    static var host: String { server?.configuration.host ?? "127.0.0.1" }
+    static var port: Int { server?.configuration.port ?? 5432 }
+    static var username: String { server?.configuration.username ?? "postgres" }
+    static var password: String? { server?.configuration.password }
+    /// The run's sample database once ``SampleDatabase/prepare(logger:)`` has made it; the URL's
+    /// database before that.
+    static var database: String { SampleDatabase.name ?? server?.configuration.database ?? "postgres" }
+    /// For tests that build `PostgresConfiguration(useTLS:)`: true when the URL requires TLS.
     static var useTLS: Bool {
-        (getEnv("POSTGRES_TLS") ?? "false").lowercased() == "true"
+        guard let mode = server?.configuration.sslMode else { return false }
+        return mode == .require || mode == .verifyCA || mode == .verifyFull
     }
 
-    /// Configuration for the test server, with optional overrides for the settings under test.
+    /// The URL's configuration (TLS settings included) on the sample database, with overrides for
+    /// the settings under test.
     static func configuration(
         database: String? = nil,
         username: String? = nil,
@@ -83,16 +33,14 @@ enum TestEnv {
         pool: PostgresPoolConfiguration = .init(),
         statementTimeout: Duration? = nil
     ) -> PostgresConfiguration {
-        PostgresConfiguration(
-            host: host,
-            port: port,
-            database: database ?? self.database,
-            username: username ?? self.username,
-            password: password ?? self.password,
-            sslMode: useTLS ? .require : .disable,
-            applicationName: applicationName,
-            pool: pool,
-            statementTimeout: statementTimeout
-        )
+        var configuration = server?.configuration
+            ?? PostgresConfiguration(host: host, port: port, username: self.username, password: self.password)
+        configuration.database = database ?? self.database
+        if let username { configuration.username = username }
+        if let password { configuration.password = password }
+        configuration.applicationName = applicationName
+        configuration.pool = pool
+        configuration.statementTimeout = statementTimeout
+        return configuration
     }
 }

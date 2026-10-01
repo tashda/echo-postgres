@@ -7,6 +7,8 @@ import Logging
 /// aggregates, languages, FTS configurations, and rules.
 final class AdvancedObjectAlterTests: PostgresKitTestCase {
     private var client: PostgresKit.PostgresClient!
+    /// Server-wide objects a test made, dropped in tearDown before the client closes.
+    private var tablespacesToDrop: [String] = []
 
     override func setUp() async throws {
         try await super.setUp()
@@ -29,6 +31,8 @@ final class AdvancedObjectAlterTests: PostgresKitTestCase {
     }
 
     override func tearDown() async throws {
+        for name in tablespacesToDrop { _ = try? await client?.admin.dropTablespace(name: name, ifExists: true) }
+        tablespacesToDrop = []
         client?.close()
     }
 
@@ -173,13 +177,8 @@ final class AdvancedObjectAlterTests: PostgresKitTestCase {
 
         let name = uniqueName("ts")
         let newName = uniqueName("ts_ren")
-        defer {
-            Task { [client = self.client!] in
-                _ = try? await client.admin.dropTablespace(name: newName, ifExists: true)
-                _ = try? await client.admin.dropTablespace(name: name, ifExists: true)
-            }
-            try? fm.removeItem(atPath: tsDir)
-        }
+        tablespacesToDrop += [newName, name]
+        defer { try? fm.removeItem(atPath: tsDir) }
 
         do {
             // Create

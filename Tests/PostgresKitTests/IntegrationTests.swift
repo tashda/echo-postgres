@@ -5,7 +5,7 @@ import Logging
 final class IntegrationTests: PostgresKitTestCase {
     func testConnectAndSelectOneIfConfigured() async throws {
         guard TestEnv.isConfigured else {
-            throw XCTSkip("Postgres environment not set and USE_DOCKER not enabled; skipping integration test")
+            throw XCTSkip("Set POSTGRES_TEST_URL to run this test (see TESTING.md).")
         }
         
         let config = PostgresConfiguration(

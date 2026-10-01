@@ -39,6 +39,8 @@ public struct PostgresConfiguration: Sendable {
     public var sslKeyPassword: String?
     /// Kerberos service name (libpq `krbsrvname`); `nil` refuses Kerberos. See ``PostgresKerberos``.
     public var kerberosServiceName: String? = "postgres"
+    /// The host name in the server's Kerberos principal when it differs from ``host``; `nil` uses ``host``.
+    public var kerberosServiceHost: String?
     /// Reported to the server as `application_name` (visible in `pg_stat_activity`).
     public var applicationName: String?
     public var pool: PostgresPoolConfiguration
@@ -171,6 +173,7 @@ extension PostgresConfiguration {
         )
         configuration.sslKeyPassword = sslKeyPassword
         configuration.kerberosServiceName = kerberosServiceName
+        configuration.kerberosServiceHost = kerberosServiceHost
         return configuration
     }
 }

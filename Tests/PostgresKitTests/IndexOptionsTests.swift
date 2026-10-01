@@ -2,7 +2,7 @@ import XCTest
 import Logging
 @testable import PostgresKit
 
-/// GP-05 (echo-server-lab driver gaps): per-column collation, operator class parameters,
+/// Index options: per-column collation, operator class parameters,
 /// storage parameters, and NULLS NOT DISTINCT on indexes and unique constraints, checked against
 /// the definition the server stores.
 final class IndexOptionsTests: PostgresKitTestCase {

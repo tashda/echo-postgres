@@ -13,8 +13,7 @@ let package = Package(
     products: [
         .library(name: "PostgresWire", targets: ["PostgresWire"]),
         .library(name: "PostgresKit", targets: ["PostgresKit"]),
-        .library(name: "PostgresKitTesting", targets: ["PostgresKitTesting"]),
-        .executable(name: "postgres-test-fixture", targets: ["PostgresFixtureTool"])
+        .library(name: "PostgresKitTesting", targets: ["PostgresKitTesting"])
     ],
     dependencies: [
         // PostgresNIO 1.32.0 is copied into Sources/PostgresNIO (see ThirdParty/postgres-nio);
@@ -88,11 +87,6 @@ let package = Package(
             name: "PostgresKitTesting",
             dependencies: ["PostgresKit"]
         ),
-        .executableTarget(
-            name: "PostgresFixtureTool",
-            dependencies: ["PostgresKitTesting"],
-            path: "Sources/PostgresFixtureTool"
-        ),
         .testTarget(
             name: "PostgresWireTests",
             dependencies: [
@@ -109,7 +103,7 @@ let package = Package(
                 "PostgresNIO"
             ],
             path: "Tests/PostgresKitTests",
-            exclude: ["README.md", "Support/SampleData.sql", "Support/PostgresDockerManager.swift"]
+            exclude: ["README.md", "Support/SampleData.sql", "Support/certificates"]
         )
     ]
 )

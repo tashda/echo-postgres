@@ -2,8 +2,8 @@ import XCTest
 import Logging
 @testable import PostgresKit
 
-/// pg_cron jobs. Needs pg_cron preloaded and created in the test database: echo-server-lab
-/// `pg-17-third-party-extensions` (POSTGRES_DATABASE=labdata).
+/// pg_cron jobs. Needs pg_cron preloaded and created in the database `POSTGRES_TEST_URL` names (its
+/// path, e.g. `…/labdata`, the one `cron.database_name` names); skipped without it.
 final class CronOperationsTests: PostgresKitTestCase {
     private var client: PostgresKit.PostgresClient!
 
@@ -12,13 +12,13 @@ final class CronOperationsTests: PostgresKitTestCase {
         guard TestEnv.isConfigured else { throw XCTSkip("Postgres environment not set") }
         let config = PostgresConfiguration(
             host: TestEnv.host, port: TestEnv.port,
-            database: TestEnv.database, username: TestEnv.username,
+            database: TestEnv.server?.configuration.database ?? TestEnv.database, username: TestEnv.username,
             password: TestEnv.password, useTLS: TestEnv.useTLS,
             applicationName: "CronOperationsTests"
         )
         client = try await PostgresKit.PostgresClient.connect(configuration: config, logger: Logger(label: "postgres.wire.tests"))
         let installed = try await client.metadata.listExtensions().contains { $0.name == "pg_cron" }
-        if !installed { throw XCTSkip("pg_cron is not installed in \(TestEnv.database)") }
+        if !installed { throw XCTSkip("pg_cron is not installed in the database POSTGRES_TEST_URL names") }
     }
 
     override func tearDown() async throws {

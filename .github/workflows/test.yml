@@ -1,4 +1,9 @@
-name: "Developer Workflow: Integration & Validation"
+name: "Tests"
+
+# The tests find their servers through URL variables (TESTING.md). Unit tests run on every push;
+# integration tests run against a postgres service container per supported version, and the TLS,
+# standby and proxy setups are started with the same docker commands TESTING.md gives.
+# POSTGRES_TEST_REQUIRED=1 makes a missing variable fail instead of skip, so no job passes by skipping.
 
 on:
   push:
@@ -12,220 +17,129 @@ concurrency:
   # Pull requests cancel their older runs; pushes to dev queue, so each commit is checked on its own.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # Suites that need a setup of their own; the plain integration jobs leave them to their jobs.
+  SPECIAL_SUITES: "TLSTests|KerberosTests|ProxyFailoverTests|StandbyTests"
+
 jobs:
-  build:
-    name: "Step 1: Compilation Check (Swift 6)"
+  unit:
+    name: "Unit tests"
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install MIT Kerberos (Kerberos sign-in on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev krb5-user
-
-      - name: Verify Swift toolchain
-        run: swift --version
-
-      - name: Build library
-        run: swift build
-
-      - name: Build tests
+      - uses: actions/checkout@v4
+      - name: Install MIT Kerberos (needed to build on Linux)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - run: swift --version
+      - name: Build
         run: swift build --build-tests
+      - name: Unit tests (server tests are skipped without their URL)
+        run: swift test
 
-  unit-tests:
-    name: "Step 2: Rapid Unit Tests (PostgresWire)"
-    needs: build
+  integration:
+    name: "Integration (PostgreSQL ${{ matrix.version }})"
+    needs: unit
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install MIT Kerberos (Kerberos sign-in on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev krb5-user
-
-      - name: Verify Swift toolchain
-        run: swift --version
-
-      - name: Run Unit Tests
-        run: swift test --filter PostgresWireTests
-
-  smoke-tests:
-    name: "Step 3: Rapid Functional Validation (PG 17)"
-    needs: build
-    # Only run on pushes to dev or PRs to dev. Not on PRs to main (where matrix-tests run).
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.base_ref != 'main')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install MIT Kerberos (Kerberos sign-in on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev krb5-user
-
-      - name: Verify Swift toolchain
-        run: swift --version
-
-      - name: Docker Preflight
-        run: |
-          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          printf '{}\n' > "$DOCKER_CONFIG/config.json"
-          docker info
-          docker pull postgres:17
-
-      - name: Bootstrap validated Postgres fixture
-        env:
-          USE_DOCKER: "1"
-          POSTGRES_VERSION: "17"
-          POSTGRES_PORT: "54321"
-        run: |
-          output=$(swift run --package-path . postgres-test-fixture)
-          echo "$output"
-          {
-            echo "### Postgres fixture"
-            echo ""
-            echo '```'
-            echo "$output"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Run Integration Tests
-        env:
-          USE_DOCKER: "1"
-          POSTGRES_VERSION: "17"
-          POSTGRES_PORT: "54321"
-        run: swift test --filter PostgresKitTests
-
-  tls-tests:
-    name: "Step 3b: TLS against a server that requires it (PG 17)"
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install MIT Kerberos (Kerberos sign-in on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev krb5-user
-
-      - name: Start the TLS server (private CA, server and client certificates)
-        run: |
-          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          printf '{}\n' > "$DOCKER_CONFIG/config.json"
-          Tests/Fixtures/tls/start-server.sh | sed 's/^export //' >> "$GITHUB_ENV"
-
-      - name: Run TLS tests
-        run: swift test --filter TLSIntegrationTests
-
-  kerberos-tests:
-    name: "Step 3c: Kerberos sign-in against a KDC (PG 17)"
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install MIT Kerberos (Kerberos sign-in on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev krb5-user
-
-      - name: Start PostgreSQL with Kerberos and its KDC, and get a ticket for alice
-        run: |
-          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          printf '{}\n' > "$DOCKER_CONFIG/config.json"
-          Tests/Fixtures/kerberos/start-server.sh | sed 's/^export //' >> "$GITHUB_ENV"
-
-      - name: Run Kerberos tests
-        run: swift test --filter "KerberosIntegrationTests|GSSAuthenticationStateMachineTests"
-
-  failover-tests:
-    name: "Step 3d: Failover between two servers (PG 17)"
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install MIT Kerberos (Kerberos sign-in on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev krb5-user
-
-      - name: Start two PostgreSQL servers
-        run: |
-          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          printf '{}\n' > "$DOCKER_CONFIG/config.json"
-          Tests/Fixtures/failover/start-servers.sh | sed 's/^export //' >> "$GITHUB_ENV"
-
-      - name: Run failover tests
-        run: swift test --filter FailoverIntegrationTests
-
-  matrix-tests:
-    name: "Step 4: Compatibility - ${{ matrix.name }}"
-    needs: build
-    # Only run on Pull Requests to main or pushes to main.
-    if: (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: "Active Release (PostgreSQL 14)"
-            version: "14"
-          - name: "Active Release (PostgreSQL 15)"
-            version: "15"
-          - name: "Active Release (PostgreSQL 16)"
-            version: "16"
-          - name: "Current Stable (PostgreSQL 17)"
-            version: "17"
-          - name: "Experimental (PostgreSQL 18)"
-            version: "18"
-          - name: "Rolling (PostgreSQL latest)"
-            version: "latest"
+        version: ["14", "15", "16", "17", "18"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.version }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -h 127.0.0.1"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      POSTGRES_TEST_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+      POSTGRES_TEST_REQUIRED: "1"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Install MIT Kerberos (needed to build on Linux)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: Integration tests
+        run: swift test --skip "$SPECIAL_SUITES"
 
-      - name: Install MIT Kerberos (Kerberos sign-in on Linux)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev krb5-user
-
-      - name: Verify Swift toolchain
-        run: swift --version
-
-      - name: Docker Preflight
-        env:
-          POSTGRES_VERSION: ${{ matrix.version }}
+  tls:
+    name: "TLS (PostgreSQL 17)"
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POSTGRES_TEST_TLS_URL: "postgres://postgres:postgres@localhost:5433/postgres?sslmode=verify-full&sslrootcert=/tmp/pg-tls/ca.crt"
+      POSTGRES_TEST_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MIT Kerberos (needed to build on Linux)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: Start a server that requires TLS (as in TESTING.md)
         run: |
-          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          printf '{}\n' > "$DOCKER_CONFIG/config.json"
-          docker info
-          docker pull "postgres:${POSTGRES_VERSION}"
+          mkdir -p /tmp/pg-tls && cd /tmp/pg-tls
+          openssl req -x509 -new -nodes -newkey rsa:2048 -days 30 -subj "/CN=postgres-wire test CA" -keyout ca.key -out ca.crt
+          openssl req -new -nodes -newkey rsa:2048 -subj "/CN=localhost" -keyout server.key -out server.csr
+          printf 'subjectAltName=DNS:localhost\n' > server.ext
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 30 -extfile server.ext -out server.crt
+          printf 'local all all trust\nhostssl all all all scram-sha-256\n' > pg_hba.conf
+          docker run -d --name postgres-tls -e POSTGRES_PASSWORD=postgres -p 5433:5432 -v "$PWD":/certs:ro postgres:17 bash -c \
+            'install -o postgres -m 600 /certs/server.key /tmp/server.key && install -o postgres -m 644 /certs/server.crt /tmp/server.crt &&
+             exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key -c hba_file=/certs/pg_hba.conf'
+          for i in $(seq 1 60); do docker exec postgres-tls pg_isready -U postgres -h 127.0.0.1 && break; sleep 1; done
+      - name: TLS tests
+        run: swift test --filter TLSTests
 
-      - name: Bootstrap validated Postgres fixture
-        env:
-          USE_DOCKER: "1"
-          POSTGRES_VERSION: ${{ matrix.version }}
-          POSTGRES_PORT: "54321"
+  standby:
+    name: "Primary and standby (PostgreSQL 17)"
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POSTGRES_TEST_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+      POSTGRES_TEST_STANDBY_URL: "postgres://postgres:postgres@localhost:5434/postgres?sslmode=disable"
+      POSTGRES_TEST_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MIT Kerberos (needed to build on Linux)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: Start a primary and a standby (as in TESTING.md)
         run: |
-          output=$(swift run --package-path . postgres-test-fixture)
-          echo "$output"
-          {
-            echo "### Postgres fixture"
-            echo ""
-            echo '```'
-            echo "$output"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          docker network create pg-pair
+          docker run -d --name pg-primary --network pg-pair -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
+          until docker exec pg-primary pg_isready -U postgres -h 127.0.0.1; do sleep 1; done
+          docker exec pg-primary bash -c 'echo "host replication all all scram-sha-256" >> "$PGDATA/pg_hba.conf"'
+          docker exec pg-primary psql -U postgres -c 'SELECT pg_reload_conf()'
+          docker run --rm --network pg-pair -v pg-standby:/var/lib/postgresql/data -e PGPASSWORD=postgres postgres:17 bash -c \
+            'pg_basebackup -h pg-primary -U postgres -D /var/lib/postgresql/data -R -X stream &&
+             chown -R postgres:postgres /var/lib/postgresql/data && chmod 700 /var/lib/postgresql/data'
+          docker run -d --name pg-standby --network pg-pair -v pg-standby:/var/lib/postgresql/data -p 5434:5432 postgres:17
+          for i in $(seq 1 60); do docker exec pg-primary psql -U postgres -Atc 'SELECT count(*) FROM pg_stat_replication' | grep -q 1 && break; sleep 1; done
+      - name: Standby tests
+        run: swift test --filter 'StandbyTests|PhysicalReplicationTests'
 
-      - name: Run Integration Tests
-        env:
-          USE_DOCKER: "1"
-          POSTGRES_VERSION: ${{ matrix.version }}
-          POSTGRES_PORT: "54321"
-        run: swift test --filter PostgresKitTests
+  proxy:
+    name: "Failover through a proxy (PostgreSQL 17)"
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POSTGRES_TEST_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+      POSTGRES_TEST_PROXY_URL: "postgres://postgres:postgres@localhost:6432/postgres?sslmode=disable"
+      POSTGRES_TEST_PROXY_CONTROL: "http://localhost:8474"
+      POSTGRES_TEST_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MIT Kerberos (needed to build on Linux)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+      - name: Start a server and a Toxiproxy in front of it (as in TESTING.md)
+        run: |
+          docker network create pg-proxy
+          docker run -d --name pg-server --network pg-proxy -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
+          docker run -d --name pg-toxiproxy --network pg-proxy -p 8474:8474 -p 6432:6432 ghcr.io/shopify/toxiproxy
+          until curl -s localhost:8474/version; do sleep 1; done
+          until docker exec pg-server pg_isready -U postgres -h 127.0.0.1; do sleep 1; done
+          curl -s -X POST localhost:8474/proxies -d '{"name":"postgres","listen":"0.0.0.0:6432","upstream":"pg-server:5432"}'
+      - name: Failover tests
+        run: swift test --filter ProxyFailoverTests

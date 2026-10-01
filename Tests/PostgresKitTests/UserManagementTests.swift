@@ -54,13 +54,13 @@ final class UserManagementTests: PostgresKitTestCase {
         let superName = "super_\(s)"
         await dropRoleIfExists(superName)
 
-        defer {
-            Task.detached { [client] in
-                for r in roleNames {
-                    _ = try? await client?.security.dropRole(name: r, ifExists: true)
-                }
-                _ = try? await client?.security.dropRole(name: superName, ifExists: true)
+        addTeardownBlock { [client] in
+            for r in roleNames {
+                try? await client?.security.dropOwned(by: r)
+                _ = try? await client?.security.dropRole(name: r, ifExists: true)
             }
+            try? await client?.security.dropOwned(by: superName)
+            _ = try? await client?.security.dropRole(name: superName, ifExists: true)
         }
 
         let allRoles = roleNames + [superName]
@@ -107,11 +107,11 @@ final class UserManagementTests: PostgresKitTestCase {
         let renamedName = "renamed_\(suffix)"
         await dropUserIfExists(renamedName)
 
-        defer {
-            Task.detached { [client] in
-                _ = try? await client?.security.dropUser(name: renamedName, ifExists: true)
-                _ = try? await client?.security.dropUser(name: userName, ifExists: true)
-            }
+        addTeardownBlock { [client] in
+            try? await client?.security.dropOwned(by: renamedName)
+            _ = try? await client?.security.dropUser(name: renamedName, ifExists: true)
+            try? await client?.security.dropOwned(by: userName)
+            _ = try? await client?.security.dropUser(name: userName, ifExists: true)
         }
 
         try await client.security.createRole(name: userName, password: "attrpass123", login: true, connectionLimit: 5)
@@ -144,11 +144,10 @@ final class UserManagementTests: PostgresKitTestCase {
 
         for n in allNames { await dropRoleIfExists(n) }
 
-        defer {
-            Task.detached { [client] in
-                for n in allNames {
-                    _ = try? await client?.security.dropRole(name: n, ifExists: true)
-                }
+        addTeardownBlock { [client] in
+            for n in allNames {
+                try? await client?.security.dropOwned(by: n)
+                _ = try? await client?.security.dropRole(name: n, ifExists: true)
             }
         }
 
@@ -194,12 +193,12 @@ final class UserManagementTests: PostgresKitTestCase {
         await dropRoleIfExists(userName)
         await dropRoleIfExists(roleName)
 
-        defer {
-            Task.detached { [client] in
-                _ = try? await client?.admin.dropSchema(name: schemaName, ifExists: true, cascade: true)
-                _ = try? await client?.security.dropUser(name: userName, ifExists: true)
-                _ = try? await client?.security.dropRole(name: roleName, ifExists: true)
-            }
+        addTeardownBlock { [client] in
+            _ = try? await client?.admin.dropSchema(name: schemaName, ifExists: true, cascade: true)
+            try? await client?.security.dropOwned(by: userName)
+            _ = try? await client?.security.dropUser(name: userName, ifExists: true)
+            try? await client?.security.dropOwned(by: roleName)
+            _ = try? await client?.security.dropRole(name: roleName, ifExists: true)
         }
 
         try await client.security.createRole(name: roleName)
@@ -246,12 +245,12 @@ final class UserManagementTests: PostgresKitTestCase {
         await dropUserIfExists(alice)
         await dropUserIfExists(bob)
 
-        defer {
-            Task.detached { [client] in
-                _ = try? await client?.admin.dropTable(name: table, ifExists: true)
-                _ = try? await client?.security.dropUser(name: alice, ifExists: true)
-                _ = try? await client?.security.dropUser(name: bob, ifExists: true)
-            }
+        addTeardownBlock { [client] in
+            _ = try? await client?.admin.dropTable(name: table, ifExists: true)
+            try? await client?.security.dropOwned(by: alice)
+            _ = try? await client?.security.dropUser(name: alice, ifExists: true)
+            try? await client?.security.dropOwned(by: bob)
+            _ = try? await client?.security.dropUser(name: bob, ifExists: true)
         }
 
         try await client.admin.createTable(name: table, columns: [

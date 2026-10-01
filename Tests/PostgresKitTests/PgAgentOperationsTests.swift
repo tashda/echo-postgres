@@ -2,8 +2,8 @@ import XCTest
 import Logging
 @testable import PostgresKit
 
-/// pgAgent jobs. Needs the pgagent extension in the test database: echo-server-lab
-/// `pg-17-third-party-extensions` (POSTGRES_DATABASE=postgres).
+/// pgAgent jobs. Needs the pgagent extension in the database `POSTGRES_TEST_URL` names (its path);
+/// skipped without it.
 final class PgAgentOperationsTests: PostgresKitTestCase {
     private var client: PostgresKit.PostgresClient!
 
@@ -12,13 +12,13 @@ final class PgAgentOperationsTests: PostgresKitTestCase {
         guard TestEnv.isConfigured else { throw XCTSkip("Postgres environment not set") }
         let config = PostgresConfiguration(
             host: TestEnv.host, port: TestEnv.port,
-            database: TestEnv.database, username: TestEnv.username,
+            database: TestEnv.server?.configuration.database ?? TestEnv.database, username: TestEnv.username,
             password: TestEnv.password, useTLS: TestEnv.useTLS,
             applicationName: "PgAgentOperationsTests"
         )
         client = try await PostgresKit.PostgresClient.connect(configuration: config, logger: Logger(label: "postgres.wire.tests"))
         let installed = try await client.metadata.listExtensions().contains { $0.name == "pgagent" }
-        if !installed { throw XCTSkip("pgagent is not installed in \(TestEnv.database)") }
+        if !installed { throw XCTSkip("pgagent is not installed in the database POSTGRES_TEST_URL names") }
     }
 
     override func tearDown() async throws {
