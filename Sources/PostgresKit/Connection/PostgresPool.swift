@@ -106,7 +106,7 @@ actor PostgresPool {
             await noteHost(of: connection)
             return PostgresLease(connection: connection, setup: setup, openedAt: .now)
         } catch {
-            throw PostgresError.from(error)
+            throw configuration.connectError(error)
         }
     }
 

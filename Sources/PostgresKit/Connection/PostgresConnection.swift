@@ -26,7 +26,7 @@ public final class PostgresConnection: Sendable {
         } catch {
             throw PostgresError.from(error)
         }
-        return rows(PostgresResultStream(connection: connection))
+        return try await rows(PostgresResultStream(connection: connection))
     }
 
     /// Runs one statement with `$n` parameters and streams its rows.
@@ -38,11 +38,12 @@ public final class PostgresConnection: Sendable {
         } catch {
             throw PostgresError.from(error)
         }
-        return rows(PostgresResultStream(connection: connection))
+        return try await rows(PostgresResultStream(connection: connection))
     }
 
-    private func rows(_ stream: PostgresResultStream) -> PostgresRows {
+    private func rows(_ stream: PostgresResultStream) async throws -> PostgresRows {
         lastRows.withLock { $0.stream = stream }
+        try await stream.awaitFirstResult()
         return PostgresRows(stream: stream)
     }
 

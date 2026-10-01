@@ -199,9 +199,11 @@ public final class PostgresClient: Sendable {
             await pool.release(lease, reusable: false)
             throw PostgresError.from(error)
         }
-        return PostgresRows(stream: PostgresResultStream(connection: lease.connection, completion: { _, error, _ in
+        let stream = PostgresResultStream(connection: lease.connection, completion: { _, error, _ in
             await pool.release(lease, reusable: !((error as? PostgresError)?.isConnectionLost ?? false))
-        }))
+        })
+        try await stream.awaitFirstResult()
+        return PostgresRows(stream: stream)
     }
 
     /// Ask the server to cancel what backend `pid` is running (`pg_cancel_backend`).

@@ -158,6 +158,24 @@ extension PostgresConfiguration {
     #endif
 }
 
+extension PostgresConfiguration {
+    /// A connect failure as a PostgresError; when `target_session_attrs` turned every host down,
+    /// it says so in Echo's words ("No server matched target_session_attrs=standby."), with
+    /// libpq's reason after it.
+    func connectError(_ error: any Error) -> PostgresError {
+        let mapped = PostgresError.from(error)
+        guard targetSessionAttributes != .any, let detail = mapped.detail?.lowercased() else { return mapped }
+        let attributeRefusals = ["hot standby mode", "session is read-only", "session is not read-only", "server is in hot standby", "server is not in hot standby"]
+        guard attributeRefusals.contains(where: detail.contains) else { return mapped }
+        let reason = PostgresConnectionMessages.firstLine(of: mapped.detail ?? "", droppingPrefix: true)
+        return PostgresError(
+            message: "No server matched target_session_attrs=\(targetSessionAttributes.rawValue). \(reason)",
+            serverInfo: mapped.detail.map { ["detail": $0] },
+            isConnectionError: true
+        )
+    }
+}
+
 /// A host name could not be turned into an address (for a Kerberos service host).
 public struct PostgresHostResolutionError: Error, LocalizedError, Sendable {
     public let host: String

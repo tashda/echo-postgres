@@ -117,7 +117,7 @@ public final class PostgresSessionConnection: Sendable {
             if let keepAliveInterval { session.startKeepAlive(every: keepAliveInterval) }
             return session
         } catch {
-            throw PostgresError.from(error)
+            throw configuration.connectError(error)
         }
     }
 
@@ -281,6 +281,11 @@ public final class PostgresSessionConnection: Sendable {
         }
         let stream = PostgresResultStream(connection: pgConnection, mapError: { $0 }) { [weak self] _, error, _ in
             _ = await self?.finishStatement(error: error)
+        }
+        do {
+            try await stream.awaitFirstResult()
+        } catch {
+            throw await finishStatementError(error)
         }
         return PostgresSessionRows(stream: stream, session: self)
     }

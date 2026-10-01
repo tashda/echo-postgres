@@ -106,7 +106,8 @@ final class PostgresResultStream: Sendable {
         var lateCompletions: [@Sendable ((any Error)?) async -> Void] = []
         var finished = false
         var columns: [PostgresColumn]?
-        var buffered: PGResult?
+        var buffered: [PGResult] = []
+        var pendingError: (any Error)?
         var commandTag: String?
     }
     private let state = Mutex(State())
@@ -158,8 +159,11 @@ final class PostgresResultStream: Sendable {
 
     /// The next result with rows (a chunk, or the last part of the result set); nil at the end.
     func nextChunk() async throws -> PGResult? {
-        if let buffered = state.withLock({ state -> PGResult? in defer { state.buffered = nil }; return state.buffered }) {
+        if let buffered = state.withLock({ state -> PGResult? in state.buffered.isEmpty ? nil : state.buffered.removeFirst() }) {
             return buffered
+        }
+        if let error = state.withLock({ state -> (any Error)? in defer { state.pendingError = nil }; return state.pendingError }) {
+            throw error
         }
         guard !state.withLock({ $0.finished }) else { return nil }
         do {
@@ -170,6 +174,8 @@ final class PostgresResultStream: Sendable {
                     if result.status == .rowsDone {
                         // The command tag comes with the last part; keep reading to the end.
                         try await finish(commandTag: result.commandStatus)
+                    } else {
+                        try await readAheadIfReady()
                     }
                     return result
                 case .commandDone, .emptyQuery:
@@ -193,14 +199,41 @@ final class PostgresResultStream: Sendable {
         }
     }
 
+    /// Waits for the statement's first result, so a failing statement throws where it was run (as
+    /// PostgresNIO's query did) and a command (INSERT, DDL) has finished when the call returns.
+    func awaitFirstResult() async throws {
+        _ = try await columns()
+    }
+
     /// The command tag, once the statement finished.
     var commandTag: String? { state.withLock { $0.commandTag } }
+
+    /// When the next result is already here (a small result's end, sent with its rows), read it
+    /// now: the statement then finishes at once, and the connection is free even if the reader
+    /// stops early. Never waits for the server.
+    private func readAheadIfReady() async throws {
+        guard await connection.isResultReady(), let next = try await connection.nextResult() else { return }
+        switch next.status {
+        case .rowsDone:
+            if next.rowCount > 0 { state.withLock { $0.buffered.append(next) } }
+            try await finish(commandTag: next.commandStatus)
+        case .rowsChunk:
+            state.withLock { $0.buffered.append(next) }
+        case .error:
+            let error = next.error.map { PostgresError(server: $0) } ?? PostgresError(message: "The statement failed")
+            try? await connection.drain()
+            await report(error: error)
+            state.withLock { $0.pendingError = error }
+        default:
+            try await finish(commandTag: next.commandStatus)
+        }
+    }
 
     /// The columns, reading ahead to the first result if needed.
     func columns() async throws -> [PostgresColumn] {
         if let columns = state.withLock({ $0.columns }) { return columns }
         let first = try await nextChunk()
-        if let first { state.withLock { $0.buffered = first } }
+        if let first { state.withLock { $0.buffered.insert(first, at: 0) } }
         return state.withLock { $0.columns } ?? []
     }
 

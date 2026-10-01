@@ -71,6 +71,14 @@ extension PGConnection {
         return PGResult(result)
     }
 
+    /// Whether `nextResult()` would return without waiting (reads what the socket already has,
+    /// never blocks).
+    public func isResultReady() -> Bool {
+        guard let handle, isBusy else { return false }
+        _ = PQconsumeInput(handle)
+        return PQisBusy(handle) == 0
+    }
+
     /// Runs SQL and returns every result, for short statements (catalog queries, SET …).
     public func execute(_ sql: String) async throws -> [PGResult] {
         try await send(sql, chunkSize: 1)
