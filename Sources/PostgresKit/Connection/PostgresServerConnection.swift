@@ -115,17 +115,23 @@ public final class PostgresServerConnection: Sendable {
         if database.lowercased() == connectedDatabase.lowercased() {
             return primaryClient
         }
-        if let cached = await clients.get(database) {
-            return cached
-        }
         var dbConfig = configuration
         dbConfig.database = database
-        let newClient = try await PostgresClient.connect(
-            configuration: dbConfig,
-            logger: logger
-        )
-        await clients.set(database, client: newClient)
-        return newClient
+        let logger = self.logger
+        return try await clients.client(for: database) { [dbConfig] in
+            try await PostgresClient.connect(configuration: dbConfig, logger: logger)
+        }
+    }
+
+    /// Open a dedicated ``PostgresSessionConnection`` (not pooled) to `database` with this server's
+    /// settings — for query tabs and anything else that needs transactions or session state.
+    public func makeSession(
+        database: String? = nil,
+        keepAliveInterval: Duration? = .seconds(30)
+    ) async throws -> PostgresSessionConnection {
+        var sessionConfig = configuration
+        sessionConfig.database = database ?? connectedDatabase
+        return try await PostgresSessionConnection.connect(configuration: sessionConfig, keepAliveInterval: keepAliveInterval, logger: logger)
     }
 
     /// Close all connections (primary + all cached database clients).
@@ -151,16 +157,37 @@ public final class PostgresServerConnection: Sendable {
 
 private actor ClientCache {
     private var cached: [String: PostgresClient] = [:]
+    private var pending: [String: Task<PostgresClient, any Error>] = [:]
+    private var isClosed = false
 
-    func get(_ database: String) -> PostgresClient? {
-        cached[database.lowercased()]
-    }
-
-    func set(_ database: String, client: PostgresClient) {
-        cached[database.lowercased()] = client
+    /// The cached client, or the result of the connect already in progress for `database`, or a new
+    /// connect — so concurrent first requests share one pool instead of each creating (and leaking) one.
+    func client(
+        for database: String,
+        connect: @escaping @Sendable () async throws -> PostgresClient
+    ) async throws -> PostgresClient {
+        let key = database.lowercased()
+        if let client = cached[key] { return client }
+        if let task = pending[key] { return try await task.value }
+        let task = Task { try await connect() }
+        pending[key] = task
+        do {
+            let client = try await task.value
+            pending[key] = nil
+            if isClosed {
+                client.close()
+                throw PostgresError(message: "The server connection has been closed")
+            }
+            cached[key] = client
+            return client
+        } catch {
+            pending[key] = nil
+            throw error
+        }
     }
 
     func closeAll() {
+        isClosed = true
         for client in cached.values {
             client.close()
         }

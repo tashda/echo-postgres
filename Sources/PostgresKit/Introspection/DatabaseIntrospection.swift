@@ -1,8 +1,7 @@
 import Foundation
-import PostgresWire
 
 /// High-level database introspection and property discovery.
-public extension PostgresIntrospectionClient {
+public extension PostgresMetadataClient {
     /// Fetch comprehensive properties for a specific database.
     func fetchDatabaseProperties(name: String) async throws -> PostgresDatabaseProperties {
         // daticulocale was added in PostgreSQL 15 — try the full query first,
@@ -249,11 +248,11 @@ public extension PostgresIntrospectionClient {
         var options: [String] = []
 
         options.append("    OWNER = \(quoteIdentifier(props.owner))")
-        options.append("    ENCODING = '\(props.encoding)'")
-        options.append("    LC_COLLATE = '\(props.collation)'")
-        options.append("    LC_CTYPE = '\(props.ctype)'")
+        options.append("    ENCODING = \(PostgresQuoting.quoteLiteral(props.encoding))")
+        options.append("    LC_COLLATE = \(PostgresQuoting.quoteLiteral(props.collation))")
+        options.append("    LC_CTYPE = \(PostgresQuoting.quoteLiteral(props.ctype))")
         if let icu = props.icuLocale {
-            options.append("    ICU_LOCALE = '\(icu)'")
+            options.append("    ICU_LOCALE = \(PostgresQuoting.quoteLiteral(icu))")
         }
         options.append("    TABLESPACE = \(quoteIdentifier(props.tablespace))")
         if props.connectionLimit != -1 {
@@ -269,13 +268,11 @@ public extension PostgresIntrospectionClient {
         sql += "\n    WITH\n" + options.joined(separator: "\n") + ";"
 
         if let desc = props.description, !desc.isEmpty {
-            let escaped = desc.replacingOccurrences(of: "'", with: "''")
-            sql += "\n\nCOMMENT ON DATABASE \(quoteIdentifier(props.name)) IS '\(escaped)';"
+            sql += "\n\nCOMMENT ON DATABASE \(quoteIdentifier(props.name)) IS \(PostgresQuoting.quoteLiteral(desc));"
         }
 
         for param in params {
-            let escaped = param.value.replacingOccurrences(of: "'", with: "''")
-            sql += "\n\nALTER DATABASE \(quoteIdentifier(props.name)) SET \(param.name) = '\(escaped)';"
+            sql += "\n\nALTER DATABASE \(quoteIdentifier(props.name)) SET \(quoteIdentifier(param.name)) = \(PostgresQuoting.quoteLiteral(param.value));"
         }
 
         return sql

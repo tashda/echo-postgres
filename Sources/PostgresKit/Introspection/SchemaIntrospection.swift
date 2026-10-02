@@ -1,8 +1,7 @@
 import Foundation
-import PostgresWire
 
 /// High-level schema and object discovery.
-public extension PostgresIntrospectionClient {
+public extension PostgresMetadataClient {
     /// List all databases that are not templates.
     func listDatabases() async throws -> [String] {
         var names: [String] = []
@@ -24,7 +23,9 @@ public extension PostgresIntrospectionClient {
     /// List all user schemas.
     func listSchemas() async throws -> [PostgresSchemaInfo] {
         let sql = """
-            SELECT n.nspname, r.rolname
+            SELECT n.oid::int, n.nspname, r.rolname,
+                   obj_description(n.oid, 'pg_namespace'),
+                   n.nspacl::text
             FROM pg_catalog.pg_namespace n
             JOIN pg_catalog.pg_roles r ON n.nspowner = r.oid
             WHERE n.nspname !~ '^pg_' AND n.nspname != 'information_schema'
@@ -32,8 +33,8 @@ public extension PostgresIntrospectionClient {
             """
         var results: [PostgresSchemaInfo] = []
         let rows = try await client.simpleQuery(sql)
-        for try await v in rows.decode((String, String).self) {
-            results.append(PostgresSchemaInfo(name: v.0, owner: v.1))
+        for try await v in rows.decode((Int, String, String, String?, String?).self) {
+            results.append(PostgresSchemaInfo(oid: v.0, name: v.1, owner: v.2, description: v.3, acl: v.4))
         }
         return results
     }
@@ -47,7 +48,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY table_name
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema)])
             var objects: [SchemaObject] = []
             for row in rows {
                 let (s, n, t) = try row.decode((String, String, String).self)
@@ -93,7 +94,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY a.attnum
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema), client.bind(table)])
             var out: [PostgresColumnInfo] = []
             for row in rows {
                 let (name, dataType, nullable, defaultValue, identityGen, collation) = try row.decode((String, String, String, String?, String?, String?).self)
@@ -122,7 +123,7 @@ public extension PostgresIntrospectionClient {
                 WHERE table_schema = $1
                 ORDER BY table_name, ordinal_position
                 """
-            let colRows = try await conn.queryPreparedRows(colSql, binds: [client.toPGData(value: schema)])
+            let colRows = try await conn.queryPreparedRows(colSql, binds: [client.bind(schema)])
             for row in colRows {
                 let (table, column, dataType, nullableText, maxLenText, ordinalText) = try row.decode((String, String, String, String, String?, String).self)
                 let isNullable = nullableText.uppercased() == "YES" || nullableText.uppercased() == "TRUE" || nullableText == "1"
@@ -139,7 +140,7 @@ public extension PostgresIntrospectionClient {
                   ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = $1
                 """
-            let pkRows = try await conn.queryPreparedRows(pkSql, binds: [client.toPGData(value: schema)])
+            let pkRows = try await conn.queryPreparedRows(pkSql, binds: [client.bind(schema)])
             for row in pkRows {
                 let (table, column) = try row.decode((String, String).self)
                 primaryKeysByTable[table, default: []].insert(column)
@@ -161,7 +162,7 @@ public extension PostgresIntrospectionClient {
                 WHERE con.contype = 'f' AND nsp.nspname = $1
                 ORDER BY cls.relname, idx.pos
                 """
-            let fkRows = try await conn.queryPreparedRows(fkSql, binds: [client.toPGData(value: schema)])
+            let fkRows = try await conn.queryPreparedRows(fkSql, binds: [client.bind(schema)])
             for row in fkRows {
                 let (table, column, refSchema, refTable, refColumn, conname) = try row.decode((String, String, String, String, String, String).self)
                 foreignKeysByTable[table, default: [:]][column] = PostgresColumnDetail.ForeignKeyRef(constraintName: conname, referencedSchema: refSchema, referencedTable: refTable, referencedColumn: refColumn)
@@ -177,7 +178,7 @@ public extension PostgresIntrospectionClient {
                 WHERE n.nspname = $1 AND c.relkind = 'm' AND a.attnum > 0 AND NOT a.attisdropped
                 ORDER BY c.relname, a.attnum
                 """
-            let matRows = try await conn.queryPreparedRows(matSql, binds: [client.toPGData(value: schema)])
+            let matRows = try await conn.queryPreparedRows(matSql, binds: [client.bind(schema)])
             for row in matRows {
                 let (table, column, dataType, nullableText, ordinalText) = try row.decode((String, String, String, String, String).self)
                 let isNullable = nullableText.uppercased().hasPrefix("T") || nullableText == "1"

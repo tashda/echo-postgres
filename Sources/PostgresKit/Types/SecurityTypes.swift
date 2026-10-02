@@ -52,14 +52,50 @@ public struct PostgresSecurityLabel: Sendable {
     }
 }
 
-/// Basic information about a schema.
+/// Detailed information about a schema.
 public struct PostgresSchemaInfo: Sendable {
+    public let oid: Int
     public let name: String
     public let owner: String
+    public let description: String?
+    public let acl: String?
 
-    public init(name: String, owner: String) {
+    public init(oid: Int = 0, name: String, owner: String, description: String? = nil, acl: String? = nil) {
+        self.oid = oid
         self.name = name
         self.owner = owner
+        self.description = description
+        self.acl = acl
+    }
+}
+
+/// RLS policy information.
+public struct PostgresPolicyInfo: Sendable {
+    public let name: String
+    public let tableName: String
+    public let schemaName: String
+    /// The command the policy applies to: ALL, SELECT, INSERT, UPDATE, or DELETE.
+    public let command: String
+    /// PERMISSIVE or RESTRICTIVE.
+    public let type: String
+    /// Role names the policy applies to, or empty for PUBLIC.
+    public let roles: [String]
+    public let usingExpression: String?
+    public let withCheckExpression: String?
+
+    public init(
+        name: String, tableName: String, schemaName: String,
+        command: String, type: String, roles: [String],
+        usingExpression: String?, withCheckExpression: String?
+    ) {
+        self.name = name
+        self.tableName = tableName
+        self.schemaName = schemaName
+        self.command = command
+        self.type = type
+        self.roles = roles
+        self.usingExpression = usingExpression
+        self.withCheckExpression = withCheckExpression
     }
 }
 

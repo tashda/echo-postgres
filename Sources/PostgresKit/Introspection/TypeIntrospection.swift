@@ -1,7 +1,6 @@
-import PostgresWire
 
 /// User-defined type discovery.
-public extension PostgresIntrospectionClient {
+public extension PostgresTypeClient {
     /// List user-defined types (enums, composites, ranges, domains) in a schema.
     func listTypes(schema: String) async throws -> [PostgresTypeInfo] {
         let sql = """
@@ -21,7 +20,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY t.typname
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema)])
             return try rows.map { row in
                 let (name, kind) = try row.decode((String, String).self)
                 return PostgresTypeInfo(name: name, schema: schema, kind: kind)

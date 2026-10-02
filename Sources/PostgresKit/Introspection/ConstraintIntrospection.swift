@@ -1,8 +1,7 @@
 import Foundation
-import PostgresWire
 
 /// High-level constraint and dependency introspection.
-public extension PostgresIntrospectionClient {
+public extension PostgresMetadataClient {
     /// Fetch primary key information for a table.
     func primaryKey(schema: String, table: String) async throws -> PostgresPrimaryKeyInfo? {
         let sql = """
@@ -22,7 +21,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY u.ord
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema), client.bind(table)])
             var name: String?
             var cols: [String] = []
             var isDeferrable = false
@@ -76,7 +75,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY c.conname, u.ord
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema), client.bind(table)])
             var fks: [String: [Row]] = [:]
             for row in rows {
                 let (name, column, refSchema, refTable, refColumn, onUpdate, onDelete, posStr, deferrableStr, deferredStr) = try row.decode((String, String, String, String, String, String?, String?, String, String?, String?).self)
@@ -111,7 +110,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY c.conname, u.ord
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema), client.bind(table)])
             struct Entry { var columns: [String] = []; var isDeferrable = false; var isDeferred = false }
             var map: [String: Entry] = [:]
             for row in rows {
@@ -143,7 +142,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY tc.constraint_name, kcu.ordinal_position
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema), client.bind(table)])
             struct Row { let name: String; let srcSchema: String; let srcTable: String; let srcColumn: String; let tgtColumn: String; let onUpdate: String?; let onDelete: String?; let pos: Int }
             var map: [String: [Row]] = [:]
             for row in rows {
@@ -170,7 +169,8 @@ public extension PostgresIntrospectionClient {
             ((ix.indoption[ord.position] & 1) = 1)::text AS is_descending,
             pg_get_expr(ix.indpred, tab.oid)::text AS predicate,
             am.amname::text AS index_type,
-            ix.indnkeyatts::text AS num_key_columns
+            ix.indnkeyatts::text AS num_key_columns,
+            ix.indisvalid::text AS is_valid
         FROM pg_class tab
         JOIN pg_index ix ON tab.oid = ix.indrelid
         JOIN pg_class idx ON idx.oid = ix.indexrelid
@@ -184,10 +184,12 @@ public extension PostgresIntrospectionClient {
         ORDER BY idx.relname, ord.position
         """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema), client.bind(table)])
             var acc: [String: (unique: Bool, cols: [PostgresIndexInfo.Column], predicate: String?, indexType: String?, numKeyColumns: Int)] = [:]
+            var invalid: Set<String> = []
             for row in rows {
-                let (indexName, isUniqueStr, posStr, attname, isDescStr, predicate, indexType, numKeyStr) = try row.decode((String, String, String, String?, String?, String?, String?, String?).self)
+                let (indexName, isUniqueStr, posStr, attname, isDescStr, predicate, indexType, numKeyStr, isValidStr) = try row.decode((String, String, String, String?, String?, String?, String?, String?, String).self)
+                if isValidStr == "false" || isValidStr == "f" { invalid.insert(indexName) }
                 let isUnique = isUniqueStr == "true" || isUniqueStr == "t"
                 let position = Int(posStr) ?? 0
                 let numKeyColumns = Int(numKeyStr ?? "0") ?? 0
@@ -202,7 +204,10 @@ public extension PostgresIntrospectionClient {
                 entry.indexType = indexType
                 acc[indexName] = entry
             }
-            return acc.sorted { $0.key < $1.key }.map { name, e in PostgresIndexInfo(name: name, isUnique: e.unique, columns: e.cols, predicate: e.predicate, indexType: e.indexType) }
+            return acc.sorted { $0.key < $1.key }.map { name, e in
+                PostgresIndexInfo(name: name, isUnique: e.unique, columns: e.cols, predicate: e.predicate, indexType: e.indexType,
+                                  isValid: !invalid.contains(name))
+            }
         }
     }
 
@@ -218,7 +223,7 @@ public extension PostgresIntrospectionClient {
             WHERE n.nspname = $1 AND c.relname = $2
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema), client.bind(table)])
             var fillfactor: Int?
             var toastTupleTarget: Int?
             var autovacuumEnabled: Bool?
@@ -264,7 +269,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY c.conname
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema), client.toPGData(value: table)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema), client.bind(table)])
             var out: [PostgresCheckConstraintInfo] = []
             for row in rows {
                 let (name, def) = try row.decode((String, String).self)

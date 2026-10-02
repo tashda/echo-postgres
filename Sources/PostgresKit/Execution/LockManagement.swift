@@ -1,7 +1,6 @@
-import PostgresWire
 
 /// Advisory and table lock management.
-public extension PostgresAdminClient {
+public extension PostgresSessionClient {
     /// Lock a table in the specified mode.
     @discardableResult
     func lock(table: String, mode: PostgresLockMode, nowait: Bool = false) async throws -> Int {

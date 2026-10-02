@@ -23,7 +23,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     // MARK: - Basic tsvector / tsquery
 
     func testToTsvector() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT to_tsvector('english', 'The quick brown fox')::text")
+        let rows = try await client.simpleQuery("SELECT to_tsvector('english', 'The quick brown fox')::text")
         var found = false
         for try await vec in rows.decode(String.self) {
             XCTAssertTrue(vec.contains("'quick'"))
@@ -35,7 +35,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     }
 
     func testToTsquery() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT to_tsquery('english', 'quick & fox')::text")
+        let rows = try await client.simpleQuery("SELECT to_tsquery('english', 'quick & fox')::text")
         var found = false
         for try await q in rows.decode(String.self) {
             XCTAssertTrue(q.contains("'quick'"))
@@ -48,7 +48,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     // MARK: - Match Operator @@
 
     func testMatchOperator() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT col_text FROM public.fulltext_types
             WHERE col_tsvector @@ to_tsquery('english', 'quick & fox')
         """)
@@ -61,7 +61,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     }
 
     func testNoMatchReturnsEmpty() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT count(*) FROM public.fulltext_types
             WHERE col_tsvector @@ to_tsquery('english', 'nonexistentword12345')
         """)
@@ -75,7 +75,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     func testAndOperator() async throws {
         // 'postgresql' stems differently from 'postgres' in English stemmer,
         // so use 'postgresql' to match the tsvector from 'PostgreSQL is an advanced...'
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT col_text FROM public.fulltext_types
             WHERE col_tsvector @@ to_tsquery('english', 'postgresql & database')
         """)
@@ -86,7 +86,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
 
     func testOrOperator() async throws {
         // 'swift' matches row 3, 'fox' matches row 1
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT count(*) FROM public.fulltext_types
             WHERE col_tsvector @@ to_tsquery('english', 'swift | fox')
         """)
@@ -96,7 +96,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     }
 
     func testNotOperator() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT col_text FROM public.fulltext_types
             WHERE col_tsvector @@ to_tsquery('english', 'swift & !objective')
         """)
@@ -111,7 +111,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     // MARK: - Phrase Search
 
     func testPhraseTsquery() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT count(*) FROM public.fulltext_types
             WHERE col_tsvector @@ phraseto_tsquery('english', 'brown fox')
         """)
@@ -123,7 +123,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     // MARK: - Ranking
 
     func testTsRank() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT col_text, ts_rank(col_tsvector, to_tsquery('english', 'database'))
             FROM public.fulltext_types
             WHERE col_tsvector @@ to_tsquery('english', 'database')
@@ -135,7 +135,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     }
 
     func testTsRankCd() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT ts_rank_cd(col_tsvector, to_tsquery('english', 'quick & fox'))
             FROM public.fulltext_types
             WHERE col_tsvector @@ to_tsquery('english', 'quick & fox')
@@ -149,7 +149,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
 
     func testPostSearchVectorIsPopulated() async throws {
         // The trigger trg_posts_search_vector should auto-populate search_vector
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT title FROM app.posts
             WHERE search_vector @@ to_tsquery('english', 'postgresql')
         """)
@@ -159,7 +159,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     }
 
     func testPostSearchVectorMatchesContent() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT title FROM app.posts
             WHERE search_vector @@ to_tsquery('english', 'jsonb & queries')
         """)
@@ -174,14 +174,14 @@ final class FullTextSearchTests: PostgresKitTestCase {
     // MARK: - GIN Index on fulltext_types
 
     func testGINIndexUsedForFullTextSearch() async throws {
-        let plan = try await client.connection.explain("SELECT * FROM public.fulltext_types WHERE col_tsvector @@ to_tsquery('english', 'quick')")
+        let plan = try await client.executionPlan.explain("SELECT * FROM public.fulltext_types WHERE col_tsvector @@ to_tsquery('english', 'quick')")
         XCTAssertFalse(plan.isEmpty, "EXPLAIN should produce a plan")
     }
 
     // MARK: - Plainto_tsquery
 
     func testPlaintoTsquery() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT count(*) FROM public.fulltext_types
             WHERE col_tsvector @@ plainto_tsquery('english', 'open source database')
         """)
@@ -193,7 +193,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     // MARK: - Websearch_to_tsquery
 
     func testWebsearchToTsquery() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT count(*) FROM public.fulltext_types
             WHERE col_tsvector @@ websearch_to_tsquery('english', 'swift programming -objective')
         """)
@@ -205,7 +205,7 @@ final class FullTextSearchTests: PostgresKitTestCase {
     // MARK: - Headline
 
     func testTsHeadline() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT ts_headline('english', col_text, to_tsquery('english', 'fox'), 'StartSel=<b>, StopSel=</b>')
             FROM public.fulltext_types
             WHERE col_tsvector @@ to_tsquery('english', 'fox')

@@ -8,7 +8,6 @@ final class TransactionDebugTests: PostgresKitTestCase {
     private var testLogger: Logger!
 
     override func setUp() async throws {
-        TestEnv.loadDotEnv()
         try await super.setUp()
         guard TestEnv.isConfigured else {
             throw XCTSkip("POSTGRES_HOST not set; skipping integration test")
@@ -38,7 +37,7 @@ final class TransactionDebugTests: PostgresKitTestCase {
         logger.info("Testing Temporary Table Behavior")
 
         let log = self.logger
-        let result = try await client.connection.withConnection { conn in
+        let result = try await client.withConnection { conn in
             // Create temporary table and test its behavior
             _ = try await conn.createTable(
                 name: "debug_tx",
@@ -107,7 +106,7 @@ final class TransactionDebugTests: PostgresKitTestCase {
         logger.info("Testing Transaction Isolation")
 
         let log = self.logger
-        let result = try await client.connection.withConnection { conn in
+        let result = try await client.withConnection { conn in
             // Start transaction
             _ = try await conn.beginTransaction()
 
@@ -157,7 +156,7 @@ final class TransactionDebugTests: PostgresKitTestCase {
         logger.info("Testing Rollback Behavior")
 
         let log = self.logger
-        let result = try await client.connection.withConnection { conn in
+        let result = try await client.withConnection { conn in
             // Create table outside transaction so it persists after rollback
             _ = try await conn.createTable(
                 name: "rollback_tx",

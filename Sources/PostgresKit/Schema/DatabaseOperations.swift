@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// High-level Database and Schema Data Definition Language (DDL) operations.
 public extension PostgresAdminClient {
@@ -22,20 +21,21 @@ public extension PostgresAdminClient {
         isTemplate: Bool? = nil,
         strategy: String? = nil
     ) async throws -> Int {
+        // PostgreSQL has no CREATE DATABASE IF NOT EXISTS: look for it first.
+        if ifNotExists, try await databaseExists(name) { return 0 }
         var parts: [String] = ["CREATE DATABASE"]
-        if ifNotExists { parts.append("IF NOT EXISTS") }
         parts.append(client.quoteIdentifier(name))
 
         var withClauses: [String] = []
         if let template { withClauses.append("TEMPLATE = \(client.quoteIdentifier(template))") }
         if let owner { withClauses.append("OWNER = \(client.quoteIdentifier(owner))") }
-        if let encoding { withClauses.append("ENCODING = '\(encoding)'") }
-        if let lcCollate { withClauses.append("LC_COLLATE = '\(lcCollate)'") }
-        if let lcCtype { withClauses.append("LC_CTYPE = '\(lcCtype)'") }
-        if let icuLocale { withClauses.append("ICU_LOCALE = '\(icuLocale)'") }
-        if let icuRules { withClauses.append("ICU_RULES = '\(icuRules)'") }
+        if let encoding { withClauses.append("ENCODING = \(client.quoteLiteral(encoding))") }
+        if let lcCollate { withClauses.append("LC_COLLATE = \(client.quoteLiteral(lcCollate))") }
+        if let lcCtype { withClauses.append("LC_CTYPE = \(client.quoteLiteral(lcCtype))") }
+        if let icuLocale { withClauses.append("ICU_LOCALE = \(client.quoteLiteral(icuLocale))") }
+        if let icuRules { withClauses.append("ICU_RULES = \(client.quoteLiteral(icuRules))") }
         if let localeProvider { withClauses.append("LOCALE_PROVIDER = \(localeProvider)") }
-        if let collationVersion { withClauses.append("COLLATION_VERSION = '\(collationVersion)'") }
+        if let collationVersion { withClauses.append("COLLATION_VERSION = \(client.quoteLiteral(collationVersion))") }
         if let tablespace { withClauses.append("TABLESPACE = \(client.quoteIdentifier(tablespace))") }
         if let allowConnections { withClauses.append("ALLOW_CONNECTIONS = \(allowConnections)") }
         if let connectionLimit { withClauses.append("CONNECTION LIMIT = \(connectionLimit)") }
@@ -48,6 +48,16 @@ public extension PostgresAdminClient {
         }
 
         return try await client.executeDDL(parts.joined(separator: " "))
+    }
+
+    /// True when a database (or template) with this name exists.
+    func databaseExists(_ name: String) async throws -> Bool {
+        let bind = try client.bind(name)
+        return try await client.withConnection { conn in
+            let rows = try await conn.query("SELECT count(*) FROM pg_catalog.pg_database WHERE datname = $1", binds: [bind])
+            for try await count in rows.decode(Int64.self) { return count > 0 }
+            return false
+        }
     }
 
     /// Drop an existing database.
@@ -84,6 +94,18 @@ public extension PostgresAdminClient {
         parts.append(client.quoteIdentifier(name))
         if cascade { parts.append("CASCADE") }
         return try await client.executeDDL(parts.joined(separator: " "))
+    }
+
+    /// Rename a schema.
+    func alterSchemaRename(name: String, newName: String) async throws {
+        let sql = "ALTER SCHEMA \(client.quoteIdentifier(name)) RENAME TO \(client.quoteIdentifier(newName))"
+        _ = try await client.executeDDL(sql)
+    }
+
+    /// Change schema owner.
+    func alterSchemaOwner(name: String, newOwner: String) async throws {
+        let sql = "ALTER SCHEMA \(client.quoteIdentifier(name)) OWNER TO \(client.quoteIdentifier(newOwner))"
+        _ = try await client.executeDDL(sql)
     }
 
     /// Change database owner.

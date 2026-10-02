@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Row Level Security (RLS) policy management.
 public extension PostgresSecurityClient {
@@ -31,6 +30,7 @@ public extension PostgresSecurityClient {
     func createPolicy(
         name: String,
         table: String,
+        schema: String? = nil,
         command: PostgresPolicyCommand = .all,
         to: [String]? = nil,
         using: String? = nil,
@@ -38,11 +38,11 @@ public extension PostgresSecurityClient {
         permissive: Bool = true
     ) async throws -> Int {
         var parts: [String] = ["CREATE POLICY \(client.quoteIdentifier(name))"]
-        parts.append("ON \(client.quoteIdentifier(table))")
+        parts.append("ON \(client.quoteQualified(table, schema: schema))")
         if !permissive { parts.append("AS RESTRICTIVE") }
         parts.append("FOR \(command.rawValue)")
         if let to, !to.isEmpty {
-            parts.append("TO \(to.map(client.quoteIdentifier).joined(separator: ", "))")
+            parts.append("TO \(to.map(client.quoteGrantee).joined(separator: ", "))")
         }
         if let using {
             parts.append("USING (\(using))")

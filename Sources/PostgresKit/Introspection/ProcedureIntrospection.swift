@@ -1,7 +1,6 @@
-import PostgresWire
 
 /// Stored procedure discovery.
-public extension PostgresIntrospectionClient {
+public extension PostgresMetadataClient {
     /// List stored procedures in a schema (PG 11+).
     func listProcedures(schema: String) async throws -> [String] {
         let sql = """
@@ -12,7 +11,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY p.proname
             """
         return try await client.withConnection { conn in
-            let rows = try await conn.queryPreparedRows(sql, binds: [client.toPGData(value: schema)])
+            let rows = try await conn.queryPreparedRows(sql, binds: [client.bind(schema)])
             return try rows.map { try $0.decode(String.self) }
         }
     }

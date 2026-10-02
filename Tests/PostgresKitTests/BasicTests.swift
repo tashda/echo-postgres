@@ -38,7 +38,7 @@ final class BasicTests: PostgresKitTestCase {
     // MARK: - Basic Connection Tests
 
     func testBasicConnection() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT 1 as test_value")
+        let rows = try await client.simpleQuery("SELECT 1 as test_value")
         var values: [Int] = []
         for try await value in rows.decode(Int.self) {
             values.append(value)
@@ -47,7 +47,7 @@ final class BasicTests: PostgresKitTestCase {
     }
 
     func testSimpleQuery() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT 'hello' as message")
+        let rows = try await client.simpleQuery("SELECT 'hello' as message")
         var messages: [String] = []
         for try await message in rows.decode(String.self) {
             messages.append(message)
@@ -56,8 +56,8 @@ final class BasicTests: PostgresKitTestCase {
     }
 
     func testParameterizedQuery() async throws {
-        let result = try await client.connection.withConnection { conn in
-            try await conn.query("SELECT $1::text as value", binds: [PGData(string: "parameterized")])
+        let result = try await client.withConnection { conn in
+            try await conn.query("SELECT $1::text as value", binds: [PostgresBind.text("parameterized")])
         }
 
         var values: [String] = []
@@ -68,13 +68,13 @@ final class BasicTests: PostgresKitTestCase {
     }
 
     func testMultipleParameterBinding() async throws {
-        let result = try await client.connection.withConnection { conn in
+        let result = try await client.withConnection { conn in
             try await conn.query(
                 "SELECT $1::text as text, $2::integer as number, $3::boolean as bool",
                 binds: [
-                    PGData(string: "test"),
-                    PGData(int32: 123),
-                    PGData(bool: true)
+                    PostgresBind.text("test"),
+                    PostgresBind.int32(123),
+                    PostgresBind.bool(true)
                 ]
             )
         }
@@ -89,7 +89,7 @@ final class BasicTests: PostgresKitTestCase {
     // MARK: - Data Type Tests
 
     func testBasicDataTypes() async throws {
-        let result = try await client.connection.withConnection { conn in
+        let result = try await client.withConnection { conn in
             try await conn.query("""
                 SELECT
                     $1::text as text_field,
@@ -99,12 +99,12 @@ final class BasicTests: PostgresKitTestCase {
                     $5::real as real_field,
                     $6::double precision as double_field
             """, binds: [
-                PGData(string: "test_text"),
-                PGData(int32: 42),
-                PGData(int64: 1234567890),
-                PGData(bool: true),
-                PGData(float: 3.14),
-                PGData(double: 2.718281828459045)
+                PostgresBind.text("test_text"),
+                PostgresBind.int32(42),
+                PostgresBind.int(Int(1234567890)),
+                PostgresBind.bool(true),
+                PostgresBind.double(Double(3.14)),
+                PostgresBind.double(2.718281828459045)
             ])
         }
 
@@ -116,7 +116,7 @@ final class BasicTests: PostgresKitTestCase {
     }
 
     func testNullValueHandling() async throws {
-        let result = try await client.connection.withConnection { conn in
+        let result = try await client.withConnection { conn in
             try await conn.query("SELECT NULL as null_value, 'not_null' as text_value", binds: [])
         }
 
@@ -140,7 +140,7 @@ final class BasicTests: PostgresKitTestCase {
         )
 
         let log = self.logger
-        let result = try await client.connection.withConnection { conn in
+        let result = try await client.withConnection { conn in
             _ = try await conn.beginTransaction()
             _ = try await conn.insert(into: "test_tx", columns: ["value"], values: [["test1"], ["test2"]])
             _ = try await conn.commit()
@@ -175,7 +175,7 @@ final class BasicTests: PostgresKitTestCase {
         )
 
         let log2 = self.logger
-        let result = try await client.connection.withConnection { conn in
+        let result = try await client.withConnection { conn in
             _ = try await conn.beginTransaction()
             _ = try await conn.insert(into: "test_rollback", columns: ["value"], values: [["rollback_test"]])
             _ = try await conn.rollback()
@@ -203,60 +203,32 @@ final class BasicTests: PostgresKitTestCase {
 
     func testQueryErrorHandling() async throws {
         do {
-            _ = try await client.connection.simpleQuery("SELECT * FROM nonexistent_table")
+            _ = try await client.simpleQuery("SELECT * FROM nonexistent_table")
             XCTFail("Expected query to fail")
         } catch {
-            XCTAssertTrue(error is PostgresError || error is PostgresKitError || error is PSQLError)
+            XCTAssertTrue(error is PostgresError || error is PostgresKitError)
         }
     }
 
     func testParameterizedQueryError() async throws {
         do {
-            _ = try await client.connection.withConnection { conn in
+            _ = try await client.withConnection { conn in
                 try await conn.query("SELECT * FROM nonexistent_table", binds: [])
             }
             XCTFail("Expected query to fail")
         } catch {
-            XCTAssertTrue(error is PostgresError || error is PostgresKitError || error is PSQLError)
+            XCTAssertTrue(error is PostgresError || error is PostgresKitError)
         }
     }
 
     // MARK: - Streaming Tests
 
-    func testBasicStreaming() async throws {
-        let result = try await client.connection.streamQuery(
-            "SELECT generate_series(1, 10) as number"
-        ) { _ in
-            // Simple callback that doesn't need to capture mutable state
-        }
-
-        // If we get here without error, streaming worked
-        XCTAssertNotNil(result)
-    }
-
-    func testStreamingWithConfiguration() async throws {
-        let config = PostgresStreamConfiguration {
-            $0.initialPreviewRows = 5
-            $0.streamingFetchSize = 10
-        }
-
-        let result = try await client.connection.streamQuery(
-            "SELECT generate_series(1, 20) as number",
-            configuration: config
-        ) { _ in
-            // Simple callback
-        }
-
-        // If we get here without error, streaming with config worked
-        XCTAssertNotNil(result)
-    }
-
     // MARK: - Connection Management Tests
 
     func testMultipleConnections() async throws {
-        let result1 = try await client.connection.simpleQuery("SELECT 1")
-        let result2 = try await client.connection.simpleQuery("SELECT 2")
-        let result3 = try await client.connection.simpleQuery("SELECT 3")
+        let result1 = try await client.simpleQuery("SELECT 1")
+        let result2 = try await client.simpleQuery("SELECT 2")
+        let result3 = try await client.simpleQuery("SELECT 3")
 
         let values1 = try await result1.decode(Int.self).reduce(into: []) { $0.append($1) }
         let values2 = try await result2.decode(Int.self).reduce(into: []) { $0.append($1) }
@@ -268,11 +240,11 @@ final class BasicTests: PostgresKitTestCase {
     }
 
     func testConnectionReuse() async throws {
-        let result1 = try await client.connection.withConnection { conn in
+        let result1 = try await client.withConnection { conn in
             try await conn.simpleQuery("SELECT 1")
         }
 
-        let result2 = try await client.connection.withConnection { conn in
+        let result2 = try await client.withConnection { conn in
             try await conn.simpleQuery("SELECT 2")
         }
 
@@ -286,7 +258,7 @@ final class BasicTests: PostgresKitTestCase {
     // MARK: - Edge Cases
 
     func testEmptyResultSet() async throws {
-        let result = try await client.connection.simpleQuery("SELECT 1 WHERE 1 = 0")
+        let result = try await client.simpleQuery("SELECT 1 WHERE 1 = 0")
         var count = 0
         for try await _ in result.decode(Int.self) {
             count += 1
@@ -295,7 +267,7 @@ final class BasicTests: PostgresKitTestCase {
     }
 
     func testSingleRowResult() async throws {
-        let result = try await client.connection.simpleQuery("SELECT 42 as answer")
+        let result = try await client.simpleQuery("SELECT 42 as answer")
         var answers: [Int] = []
         for try await answer in result.decode(Int.self) {
             answers.append(answer)
@@ -306,8 +278,8 @@ final class BasicTests: PostgresKitTestCase {
     func testSpecialCharacters() async throws {
         let specialText = "Special chars: àáâãäåæçèéêë"
 
-        let result = try await client.connection.withConnection { conn in
-            try await conn.query("SELECT $1::text as special_text", binds: [PGData(string: specialText)])
+        let result = try await client.withConnection { conn in
+            try await conn.query("SELECT $1::text as special_text", binds: [PostgresBind.text(specialText)])
         }
 
         var retrievedText: String?

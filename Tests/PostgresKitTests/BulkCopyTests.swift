@@ -42,7 +42,7 @@ final class BulkCopyTests: PostgresKitTestCase {
             .text(name: "name"),
             .integer(name: "score")
         ])
-        _ = try await client.connection.insert(into: table, columns: ["id", "name", "score"], values: [
+        _ = try await client.bulk.insert(into: table, columns: ["id", "name", "score"], values: [
             [1, "Alice", 95],
             [2, "Bob", 87],
             [3, "Carol", 92]
@@ -95,7 +95,7 @@ final class BulkCopyTests: PostgresKitTestCase {
             .text(name: "name"),
             .text(name: "notes")
         ])
-        _ = try await client.connection.insert(into: table, values: [
+        _ = try await client.bulk.insert(into: table, values: [
             [1, "Alice", nil],
             [2, nil, "has notes"]
         ])
@@ -118,7 +118,7 @@ final class BulkCopyTests: PostgresKitTestCase {
             .integer(name: "id"),
             .text(name: "name")
         ])
-        _ = try await client.connection.insert(into: table, columns: ["id", "name"], values: [
+        _ = try await client.bulk.insert(into: table, columns: ["id", "name"], values: [
             [1, "O'Brien"],
             [2, "Hello, World"],
             [3, "Line1"]
@@ -161,7 +161,7 @@ final class BulkCopyTests: PostgresKitTestCase {
         )
 
         // Verify data was inserted
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM \(table)")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM \(table)")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertEqual(count, 3, "Should have inserted 3 rows")
@@ -200,7 +200,7 @@ final class BulkCopyTests: PostgresKitTestCase {
             source: source
         )
 
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM \(table)")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM \(table)")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertEqual(count, 1000, "Should have inserted 1000 rows")
@@ -220,7 +220,7 @@ final class BulkCopyTests: PostgresKitTestCase {
             .integer(name: "id"),
             .text(name: "name")
         ])
-        _ = try await client.connection.insert(into: sourceTable, columns: ["id", "name"], values: [
+        _ = try await client.bulk.insert(into: sourceTable, columns: ["id", "name"], values: [
             [1, "Alice"],
             [2, "Bob"],
             [3, "Carol"]
@@ -252,7 +252,7 @@ final class BulkCopyTests: PostgresKitTestCase {
         }
 
         // Verify destination has same data
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM \(destTable)")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM \(destTable)")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertEqual(count, 3, "Destination should have same 3 rows")
@@ -286,7 +286,7 @@ final class BulkCopyTests: PostgresKitTestCase {
             source: source
         )
 
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM \(table)")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM \(table)")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertEqual(count, 2)

@@ -24,21 +24,21 @@ final class RangeTypeTests: PostgresKitTestCase {
     // MARK: - Read All Range Types from SampleData
 
     func testAllRangeTypesExist() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM public.range_types WHERE col_int4range IS NOT NULL")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM public.range_types WHERE col_int4range IS NOT NULL")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertGreaterThanOrEqual(count, 2)
     }
 
     func testInt4RangeValues() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range IS NOT NULL AND col_int4range != 'empty' ORDER BY id")
+        let rows = try await client.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range IS NOT NULL AND col_int4range != 'empty' ORDER BY id")
         var ranges: [String] = []
         for try await r in rows.decode(String.self) { ranges.append(r) }
         XCTAssertTrue(ranges.contains("[1,10)"))
     }
 
     func testInt8RangeValues() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int8range::text FROM public.range_types WHERE col_int8range IS NOT NULL AND col_int8range != 'empty' ORDER BY id LIMIT 1")
+        let rows = try await client.simpleQuery("SELECT col_int8range::text FROM public.range_types WHERE col_int8range IS NOT NULL AND col_int8range != 'empty' ORDER BY id LIMIT 1")
         var found = false
         for try await r in rows.decode(String.self) {
             XCTAssertEqual(r, "[1,1000000)")
@@ -48,7 +48,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     }
 
     func testDateRangeValues() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_daterange::text FROM public.range_types WHERE col_daterange IS NOT NULL AND col_daterange != 'empty' ORDER BY id LIMIT 1")
+        let rows = try await client.simpleQuery("SELECT col_daterange::text FROM public.range_types WHERE col_daterange IS NOT NULL AND col_daterange != 'empty' ORDER BY id LIMIT 1")
         var found = false
         for try await r in rows.decode(String.self) {
             XCTAssertTrue(r.contains("2024"))
@@ -60,14 +60,14 @@ final class RangeTypeTests: PostgresKitTestCase {
     // MARK: - Containment @>
 
     func testContainmentOperator() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range @> 5")
+        let rows = try await client.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range @> 5")
         var ranges: [String] = []
         for try await r in rows.decode(String.self) { ranges.append(r) }
         XCTAssertFalse(ranges.isEmpty, "Should find ranges containing 5")
     }
 
     func testContainedByOperator() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM public.range_types WHERE col_int4range <@ '[0,20)'::int4range")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM public.range_types WHERE col_int4range <@ '[0,20)'::int4range")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertGreaterThan(count, 0)
@@ -76,7 +76,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     // MARK: - Overlap &&
 
     func testOverlapOperator() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM public.range_types WHERE col_int4range && '[5,15)'::int4range")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM public.range_types WHERE col_int4range && '[5,15)'::int4range")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertGreaterThan(count, 0)
@@ -85,7 +85,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     // MARK: - Bound Functions
 
     func testLowerFunction() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT lower(col_int4range) FROM public.range_types WHERE col_int4range = '[1,10)'")
+        let rows = try await client.simpleQuery("SELECT lower(col_int4range) FROM public.range_types WHERE col_int4range = '[1,10)'")
         var found = false
         for try await val in rows.decode(Int.self) {
             XCTAssertEqual(val, 1)
@@ -95,7 +95,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     }
 
     func testUpperFunction() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT upper(col_int4range) FROM public.range_types WHERE col_int4range = '[1,10)'")
+        let rows = try await client.simpleQuery("SELECT upper(col_int4range) FROM public.range_types WHERE col_int4range = '[1,10)'")
         var found = false
         for try await val in rows.decode(Int.self) {
             XCTAssertEqual(val, 10)
@@ -105,7 +105,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     }
 
     func testIsEmptyFunction() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT isempty(col_int4range) FROM public.range_types WHERE col_int4range = 'empty'")
+        let rows = try await client.simpleQuery("SELECT isempty(col_int4range) FROM public.range_types WHERE col_int4range = 'empty'")
         var found = false
         for try await val in rows.decode(Bool.self) {
             XCTAssertTrue(val)
@@ -115,7 +115,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     }
 
     func testIsEmptyFalseForNonEmpty() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT isempty(col_int4range) FROM public.range_types WHERE col_int4range = '[1,10)'")
+        let rows = try await client.simpleQuery("SELECT isempty(col_int4range) FROM public.range_types WHERE col_int4range = '[1,10)'")
         var found = false
         for try await val in rows.decode(Bool.self) {
             XCTAssertFalse(val)
@@ -127,7 +127,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     // MARK: - Empty and NULL Ranges
 
     func testEmptyRange() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range = 'empty'")
+        let rows = try await client.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range = 'empty'")
         var found = false
         for try await val in rows.decode(String.self) {
             XCTAssertEqual(val, "empty")
@@ -137,7 +137,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     }
 
     func testNullRange() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int4range IS NULL FROM public.range_types WHERE col_int4range IS NULL")
+        let rows = try await client.simpleQuery("SELECT col_int4range IS NULL FROM public.range_types WHERE col_int4range IS NULL")
         var found = false
         for try await _ in rows { found = true }
         XCTAssertTrue(found)
@@ -153,13 +153,13 @@ final class RangeTypeTests: PostgresKitTestCase {
             .serial(name: "id", primaryKey: true),
             PostgresColumnDefinition(name: "r", dataType: "INT4RANGE")
         ])
-        try await client.connection.insert(into: table, columns: ["r"], values: [
+        try await client.bulk.insert(into: table, columns: ["r"], values: [
             [.range("[10,20)")],
             [.range("[100,200]")],
             [.range("empty")]
         ])
 
-        let rows = try await client.connection.simpleQuery("SELECT r::text FROM \(table) ORDER BY id")
+        let rows = try await client.simpleQuery("SELECT r::text FROM \(table) ORDER BY id")
         var ranges: [String] = []
         for try await r in rows.decode(String.self) { ranges.append(r) }
         XCTAssertEqual(ranges.count, 3)
@@ -171,7 +171,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     // MARK: - Numeric Range
 
     func testNumericRangeContainment() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_numrange::text FROM public.range_types WHERE col_numrange @> 50.0::numeric")
+        let rows = try await client.simpleQuery("SELECT col_numrange::text FROM public.range_types WHERE col_numrange @> 50.0::numeric")
         var ranges: [String] = []
         for try await r in rows.decode(String.self) { ranges.append(r) }
         XCTAssertFalse(ranges.isEmpty)
@@ -180,7 +180,7 @@ final class RangeTypeTests: PostgresKitTestCase {
     // MARK: - Timestamp Range
 
     func testTimestampRangeOverlap() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT count(*) FROM public.range_types
             WHERE col_tstzrange && '[2024-06-01 00:00:00+00, 2024-07-01 00:00:00+00]'::tstzrange
         """)
@@ -192,14 +192,14 @@ final class RangeTypeTests: PostgresKitTestCase {
     // MARK: - Order valid_during in app.orders
 
     func testOrderValidDuringRange() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM app.orders WHERE valid_during IS NOT NULL")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM app.orders WHERE valid_during IS NOT NULL")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertGreaterThan(count, 0, "Orders should have valid_during ranges")
     }
 
     func testOrderValidDuringContainment() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT count(*) FROM app.orders
             WHERE valid_during @> '2024-06-15 12:00:00+00'::timestamptz
         """)

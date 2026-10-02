@@ -11,7 +11,7 @@ public enum PostgresFunctionMode: Sendable {
 public enum PostgresFunctionLanguage: String, Sendable {
     case sql = "SQL"
     case plpgsql = "PLPGSQL"
-    case plpython = "PLPYTHONU"
+    case plpython = "PLPYTHON3U"
     case plperl = "PLPERLU"
     case pltcl = "PLTCL"
 }

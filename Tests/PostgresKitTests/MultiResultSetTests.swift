@@ -42,7 +42,7 @@ final class MultiResultSetTests: PostgresKitTestCase {
     // MARK: - Single Statement Baseline
 
     func testSingleStatementBaseline() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT 1 AS value")
+        let rows = try await client.simpleQuery("SELECT 1 AS value")
         var values: [Int] = []
         for try await value in rows.decode(Int.self) {
             values.append(value)
@@ -53,7 +53,7 @@ final class MultiResultSetTests: PostgresKitTestCase {
     // MARK: - Single Statement with Multiple Rows
 
     func testSingleStatementMultipleRows() async throws {
-        let rows = try await client.connection.simpleQuery(
+        let rows = try await client.simpleQuery(
             "SELECT generate_series(1, 5) AS val"
         )
         var values: [Int] = []
@@ -65,38 +65,21 @@ final class MultiResultSetTests: PostgresKitTestCase {
 
     // MARK: - Streaming Single Statement
 
-    func testStreamingSingleStatement() async throws {
-        let counter = StreamUpdateCounter()
-
-        let result = try await client.connection.streamQuery(
-            "SELECT generate_series(1, 100) AS val"
-        ) { update in
-            await counter.record(update)
-        }
-
-        let updateCount = await counter.count
-
-        XCTAssertEqual(result.totalRowCount, 100,
-            "Stream should deliver exactly 100 rows from generate_series(1,100)")
-        XCTAssertGreaterThanOrEqual(updateCount, 1,
-            "Should have received at least one streaming update")
-    }
-
     // MARK: - DML then SELECT (separate queries)
 
     func testDMLThenSelectSeparateQueries() async throws {
         // Create temp table
-        _ = try await client.connection.simpleQuery(
+        _ = try await client.simpleQuery(
             "CREATE TEMPORARY TABLE dml_test (id SERIAL PRIMARY KEY, label TEXT)"
         )
 
         // INSERT
-        _ = try await client.connection.simpleQuery(
+        _ = try await client.simpleQuery(
             "INSERT INTO dml_test (label) VALUES ('one'), ('two'), ('three')"
         )
 
         // SELECT
-        let rows = try await client.connection.simpleQuery(
+        let rows = try await client.simpleQuery(
             "SELECT label FROM dml_test ORDER BY id"
         )
         var labels: [String] = []
@@ -109,40 +92,7 @@ final class MultiResultSetTests: PostgresKitTestCase {
 
     // MARK: - Streaming with Temp Table
 
-    func testStreamingWithTempTable() async throws {
-        // Create and populate temp table
-        _ = try await client.connection.simpleQuery(
-            "CREATE TEMPORARY TABLE stream_test (id INT, name TEXT)"
-        )
-        _ = try await client.connection.simpleQuery(
-            "INSERT INTO stream_test SELECT g, 'row' || g FROM generate_series(1, 50) g"
-        )
-
-        let counter = StreamUpdateCounter()
-
-        let result = try await client.connection.streamQuery(
-            "SELECT * FROM stream_test ORDER BY id"
-        ) { update in
-            await counter.record(update)
-        }
-
-        XCTAssertEqual(result.totalRowCount, 50,
-            "Should stream all 50 rows")
-        let finalCount = await counter.count
-        XCTAssertGreaterThanOrEqual(finalCount, 1,
-            "Should have received at least one streaming update")
-    }
 }
 
 // MARK: - Helpers
 
-/// Thread-safe counter for streaming update callbacks.
-private actor StreamUpdateCounter {
-    private(set) var count: Int = 0
-    private(set) var lastTotalRowCount: Int = 0
-
-    func record(_ update: PostgresStreamUpdate) {
-        count += 1
-        lastTotalRowCount = update.totalRowCount
-    }
-}

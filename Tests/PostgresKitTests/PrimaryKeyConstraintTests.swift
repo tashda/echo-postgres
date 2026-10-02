@@ -38,12 +38,12 @@ final class PrimaryKeyConstraintTests: PostgresKitTestCase {
             .text(name: "name", nullable: false)
         ])
 
-        _ = try await client.admin.addPrimaryKey(table: table, column: "code", constraintName: "\(table)_pk")
+        _ = try await client.constraints.addPrimaryKey(table: table, column: "code", constraintName: "\(table)_pk")
 
-        _ = try await client.connection.insert(into: table, columns: ["code", "name"], values: [[100, "Item A"], [200, "Item B"]])
+        _ = try await client.bulk.insert(into: table, columns: ["code", "name"], values: [[100, "Item A"], [200, "Item B"]])
 
         // Verify data was inserted
-        let rows = try await client.connection.simpleQuery("SELECT code FROM \(table) ORDER BY code")
+        let rows = try await client.simpleQuery("SELECT code FROM \(table) ORDER BY code")
         var codes: [Int] = []
         for try await code in rows.decode(Int.self) { codes.append(code) }
         XCTAssertEqual(codes, [100, 200])
@@ -58,12 +58,12 @@ final class PrimaryKeyConstraintTests: PostgresKitTestCase {
             .integer(name: "code", nullable: false),
             .text(name: "name", nullable: false)
         ])
-        _ = try await client.admin.addPrimaryKey(table: table, column: "code", constraintName: "\(table)_pk")
+        _ = try await client.constraints.addPrimaryKey(table: table, column: "code", constraintName: "\(table)_pk")
 
-        _ = try await client.connection.insert(into: table, columns: ["code", "name"], values: [[100, "Item A"]])
+        _ = try await client.bulk.insert(into: table, columns: ["code", "name"], values: [[100, "Item A"]])
 
         do {
-            _ = try await client.connection.insert(into: table, columns: ["code", "name"], values: [[100, "Item C"]])
+            _ = try await client.bulk.insert(into: table, columns: ["code", "name"], values: [[100, "Item C"]])
             XCTFail("Expected primary key violation")
         } catch {
             let pgError = PostgresError.from(error)
@@ -80,9 +80,9 @@ final class PrimaryKeyConstraintTests: PostgresKitTestCase {
             .text(name: "name", nullable: false)
         ])
 
-        _ = try await client.connection.insert(into: table, columns: ["name"], values: [["First"], ["Second"]])
+        _ = try await client.bulk.insert(into: table, columns: ["name"], values: [["First"], ["Second"]])
 
-        let rows = try await client.connection.simpleQuery("SELECT id FROM \(table) ORDER BY id")
+        let rows = try await client.simpleQuery("SELECT id FROM \(table) ORDER BY id")
         var ids: [Int] = []
         for try await id in rows.decode(Int.self) { ids.append(id) }
         XCTAssertEqual(ids.count, 2)
@@ -101,16 +101,16 @@ final class PrimaryKeyConstraintTests: PostgresKitTestCase {
             .varchar(name: "name", length: 100, nullable: false)
         ])
 
-        _ = try await client.admin.addPrimaryKey(table: table, column: "department", constraintName: "\(table)_pk")
+        _ = try await client.constraints.addPrimaryKey(table: table, column: "department", constraintName: "\(table)_pk")
 
-        _ = try await client.connection.insert(into: table, columns: ["department", "employee_id", "name"], values: [
+        _ = try await client.bulk.insert(into: table, columns: ["department", "employee_id", "name"], values: [
             ["IT", 1, "John Doe"],
             ["HR", 2, "Jane Smith"]
         ])
 
         // Same department should violate PK
         do {
-            _ = try await client.connection.insert(into: table, columns: ["department", "employee_id", "name"], values: [["IT", 3, "Another"]])
+            _ = try await client.bulk.insert(into: table, columns: ["department", "employee_id", "name"], values: [["IT", 3, "Another"]])
             XCTFail("Expected composite primary key violation")
         } catch {
             let pgError = PostgresError.from(error)
@@ -128,14 +128,14 @@ final class PrimaryKeyConstraintTests: PostgresKitTestCase {
             .uuid(name: "id", nullable: false),
             .text(name: "name", nullable: false)
         ])
-        _ = try await client.admin.addPrimaryKey(table: table, column: "id", constraintName: "\(table)_pk")
+        _ = try await client.constraints.addPrimaryKey(table: table, column: "id", constraintName: "\(table)_pk")
 
         let id = UUID()
-        _ = try await client.connection.insert(into: table, columns: ["id", "name"], values: [[id, "Test"]])
+        _ = try await client.bulk.insert(into: table, columns: ["id", "name"], values: [[id, "Test"]])
 
         // Same UUID should violate
         do {
-            _ = try await client.connection.insert(into: table, columns: ["id", "name"], values: [[id, "Duplicate"]])
+            _ = try await client.bulk.insert(into: table, columns: ["id", "name"], values: [[id, "Duplicate"]])
             XCTFail("Expected UUID primary key violation")
         } catch {
             let pgError = PostgresError.from(error)
@@ -151,12 +151,12 @@ final class PrimaryKeyConstraintTests: PostgresKitTestCase {
             .varchar(name: "code", length: 20, nullable: false),
             .text(name: "description")
         ])
-        _ = try await client.admin.addPrimaryKey(table: table, column: "code", constraintName: "\(table)_pk")
+        _ = try await client.constraints.addPrimaryKey(table: table, column: "code", constraintName: "\(table)_pk")
 
-        _ = try await client.connection.insert(into: table, columns: ["code", "description"], values: [["ABC", "First"]])
+        _ = try await client.bulk.insert(into: table, columns: ["code", "description"], values: [["ABC", "First"]])
 
         do {
-            _ = try await client.connection.insert(into: table, columns: ["code", "description"], values: [["ABC", "Duplicate"]])
+            _ = try await client.bulk.insert(into: table, columns: ["code", "description"], values: [["ABC", "Duplicate"]])
             XCTFail("Expected text primary key violation")
         } catch {
             let pgError = PostgresError.from(error)

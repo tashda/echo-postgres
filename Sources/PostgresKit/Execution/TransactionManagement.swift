@@ -1,14 +1,29 @@
-import PostgresWire
 
-/// Transaction lifecycle management.
-public extension PostgresConnectionClient {
-    /// Begin a standard transaction.
+/// Transaction lifecycle management on the pooled client.
+///
+/// These methods send each statement through the pool, so `BEGIN`, the work and `COMMIT` can each
+/// land on a different connection — the transaction does not cover the work, and a connection can be
+/// returned to the pool with a transaction still open. They are kept for source compatibility only.
+/// Use ``PostgresClient/withTransaction(isolation:readOnly:_:)``, the connection-level
+/// `beginTransaction()` / `commit()` inside ``PostgresClient/withConnection(_:)``, or a
+/// ``PostgresSessionConnection``.
+public extension PostgresTransactionClient {
+    /// Run `body` inside a transaction on one leased connection. See ``PostgresClient/withTransaction(isolation:readOnly:_:)``.
+    func withTransaction<T>(
+        isolation: PostgresIsolationLevel? = nil,
+        readOnly: Bool = false,
+        _ body: @Sendable (PostgresConnection) async throws -> T
+    ) async throws -> T {
+        try await client.withTransaction(isolation: isolation, readOnly: readOnly, body)
+    }
+
+    @available(*, deprecated, message: "Pooled: BEGIN and later statements may run on different connections. Use withTransaction or PostgresSessionConnection.")
     @discardableResult
     func beginTransaction() async throws -> Int {
         return try await client.executeDDL("BEGIN")
     }
 
-    /// Begin a transaction with specific isolation level and options.
+    @available(*, deprecated, message: "Pooled: BEGIN and later statements may run on different connections. Use withTransaction or PostgresSessionConnection.")
     @discardableResult
     func beginTransaction(
         isolation: PostgresIsolationLevel,
@@ -22,34 +37,33 @@ public extension PostgresConnectionClient {
         return try await client.executeDDL(parts.joined(separator: " "))
     }
 
-    /// Commit the current transaction.
+    @available(*, deprecated, message: "Pooled: may run on a different connection than BEGIN. Use withTransaction or PostgresSessionConnection.")
     @discardableResult
     func commit() async throws -> Int {
         return try await client.executeDDL("COMMIT")
     }
 
-    /// Roll back the current transaction.
+    @available(*, deprecated, message: "Pooled: may run on a different connection than BEGIN. Use withTransaction or PostgresSessionConnection.")
     @discardableResult
     func rollback() async throws -> Int {
         return try await client.executeDDL("ROLLBACK")
     }
 
-    /// Create a named savepoint within the current transaction.
+    @available(*, deprecated, message: "Pooled: may run on a different connection than BEGIN. Use withTransaction or PostgresSessionConnection.")
     @discardableResult
     func createSavepoint(_ name: String) async throws -> Int {
-        return try await client.executeDDL("SAVEPOINT \(client.quoteIdentifier(name))")
+        return try await client.executeDDL("SAVEPOINT \(client.quoteSimpleIdentifier(name))")
     }
 
-    /// Roll back to a previously created savepoint.
+    @available(*, deprecated, message: "Pooled: may run on a different connection than BEGIN. Use withTransaction or PostgresSessionConnection.")
     @discardableResult
     func rollbackToSavepoint(_ name: String) async throws -> Int {
-        return try await client.executeDDL("ROLLBACK TO SAVEPOINT \(client.quoteIdentifier(name))")
+        return try await client.executeDDL("ROLLBACK TO SAVEPOINT \(client.quoteSimpleIdentifier(name))")
     }
 
-    /// Release a named savepoint.
+    @available(*, deprecated, message: "Pooled: may run on a different connection than BEGIN. Use withTransaction or PostgresSessionConnection.")
     @discardableResult
     func releaseSavepoint(_ name: String) async throws -> Int {
-        return try await client.executeDDL("RELEASE SAVEPOINT \(client.quoteIdentifier(name))")
+        return try await client.executeDDL("RELEASE SAVEPOINT \(client.quoteSimpleIdentifier(name))")
     }
 }
-

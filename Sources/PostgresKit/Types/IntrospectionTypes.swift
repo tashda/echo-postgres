@@ -94,13 +94,17 @@ public struct PostgresIndexInfo: Sendable {
     public let predicate: String?
     /// The index access method (e.g., `"btree"`, `"hash"`, `"gin"`, `"gist"`, `"brin"`).
     public let indexType: String?
+    /// False for an index a failed `CREATE INDEX CONCURRENTLY` left behind: it is kept up to
+    /// date but not used, until it is rebuilt or dropped.
+    public let isValid: Bool
 
-    public init(name: String, isUnique: Bool, columns: [Column], predicate: String?, indexType: String? = nil) {
+    public init(name: String, isUnique: Bool, columns: [Column], predicate: String?, indexType: String? = nil, isValid: Bool = true) {
         self.name = name
         self.isUnique = isUnique
         self.columns = columns
         self.predicate = predicate
         self.indexType = indexType
+        self.isValid = isValid
     }
 }
 
@@ -249,6 +253,139 @@ public struct PostgresAvailableExtensionInfo: Sendable {
     }
 }
 
+/// Comprehensive table details including storage parameters, owner, tablespace, etc.
+public struct PostgresTableDetails: Sendable {
+    public let oid: Int
+    public let name: String
+    public let schema: String
+    public let owner: String
+    public let tablespace: String?
+    public let hasIndexes: Bool
+    public let hasRules: Bool
+    public let hasTriggers: Bool
+    public let rowSecurity: Bool
+    public let forceRowSecurity: Bool
+    public let isPartitioned: Bool
+    public let description: String?
+    public let acl: String?
+    /// Storage options (reloptions) like fillfactor=90.
+    public let options: [String]?
+    public let estimatedRowCount: Int
+    public let totalSizeBytes: Int64
+    public let tableSizeBytes: Int64
+    public let indexesSizeBytes: Int64
+
+    public init(
+        oid: Int, name: String, schema: String, owner: String, tablespace: String?,
+        hasIndexes: Bool, hasRules: Bool, hasTriggers: Bool,
+        rowSecurity: Bool, forceRowSecurity: Bool, isPartitioned: Bool,
+        description: String?, acl: String?, options: [String]?,
+        estimatedRowCount: Int, totalSizeBytes: Int64, tableSizeBytes: Int64, indexesSizeBytes: Int64
+    ) {
+        self.oid = oid
+        self.name = name
+        self.schema = schema
+        self.owner = owner
+        self.tablespace = tablespace
+        self.hasIndexes = hasIndexes
+        self.hasRules = hasRules
+        self.hasTriggers = hasTriggers
+        self.rowSecurity = rowSecurity
+        self.forceRowSecurity = forceRowSecurity
+        self.isPartitioned = isPartitioned
+        self.description = description
+        self.acl = acl
+        self.options = options
+        self.estimatedRowCount = estimatedRowCount
+        self.totalSizeBytes = totalSizeBytes
+        self.tableSizeBytes = tableSizeBytes
+        self.indexesSizeBytes = indexesSizeBytes
+    }
+}
+
+/// Detailed column information including defaults, identity, generated, comments.
+public struct PostgresColumnDetails: Sendable {
+    public let name: String
+    public let dataType: String
+    public let ordinalPosition: Int
+    public let isNullable: Bool
+    public let defaultValue: String?
+    public let isIdentity: Bool
+    public let identityGeneration: String?
+    public let isGenerated: Bool
+    public let generationExpression: String?
+    public let collation: String?
+    public let statisticsTarget: Int?
+    public let storage: String?
+    public let description: String?
+    public let maxLength: Int?
+
+    public init(
+        name: String, dataType: String, ordinalPosition: Int, isNullable: Bool,
+        defaultValue: String?, isIdentity: Bool, identityGeneration: String?,
+        isGenerated: Bool, generationExpression: String?, collation: String?,
+        statisticsTarget: Int?, storage: String?, description: String?, maxLength: Int?
+    ) {
+        self.name = name
+        self.dataType = dataType
+        self.ordinalPosition = ordinalPosition
+        self.isNullable = isNullable
+        self.defaultValue = defaultValue
+        self.isIdentity = isIdentity
+        self.identityGeneration = identityGeneration
+        self.isGenerated = isGenerated
+        self.generationExpression = generationExpression
+        self.collation = collation
+        self.statisticsTarget = statisticsTarget
+        self.storage = storage
+        self.description = description
+        self.maxLength = maxLength
+    }
+}
+
+/// Row-level security status for a table.
+public struct PostgresRLSStatus: Sendable {
+    public let rowSecurity: Bool
+    public let forceRowSecurity: Bool
+
+    public init(rowSecurity: Bool, forceRowSecurity: Bool) {
+        self.rowSecurity = rowSecurity
+        self.forceRowSecurity = forceRowSecurity
+    }
+}
+
+/// Trigger information for a table.
+public struct PostgresTriggerInfo: Sendable {
+    public let name: String
+    /// Full event description (e.g. "BEFORE INSERT").
+    public let event: String
+    /// The DML manipulation: INSERT, UPDATE, DELETE.
+    public let manipulation: String
+    /// ROW or STATEMENT.
+    public let orientation: String
+    /// BEFORE, AFTER, or INSTEAD OF.
+    public let timing: String
+    /// The function invoked by the trigger.
+    public let functionName: String
+    public let isEnabled: Bool
+    /// The full trigger definition SQL.
+    public let definition: String?
+
+    public init(
+        name: String, event: String, manipulation: String, orientation: String,
+        timing: String, functionName: String, isEnabled: Bool, definition: String?
+    ) {
+        self.name = name
+        self.event = event
+        self.manipulation = manipulation
+        self.orientation = orientation
+        self.timing = timing
+        self.functionName = functionName
+        self.isEnabled = isEnabled
+        self.definition = definition
+    }
+}
+
 /// Sequence information.
 public struct PostgresSequenceInfo: Sendable {
     public let name: String
@@ -271,6 +408,56 @@ public struct PostgresTypeInfo: Sendable {
         self.name = name
         self.schema = schema
         self.kind = kind
+    }
+}
+
+/// Partition strategy for a partitioned table.
+public enum PartitionStrategy: String, Sendable, CaseIterable {
+    case range = "RANGE"
+    case list = "LIST"
+    case hash = "HASH"
+}
+
+/// Partition information for a partitioned table.
+public struct PostgresPartitionInfo: Sendable {
+    public let strategy: PartitionStrategy
+    /// The partition key expression (e.g. "RANGE (created_at)").
+    public let partitionKey: String
+    public let partitionCount: Int
+
+    public init(strategy: PartitionStrategy, partitionKey: String, partitionCount: Int) {
+        self.strategy = strategy
+        self.partitionKey = partitionKey
+        self.partitionCount = partitionCount
+    }
+}
+
+/// Detail about a single partition of a partitioned table.
+public struct PostgresPartitionDetail: Sendable {
+    public let schemaName: String
+    public let partitionName: String
+    /// The partition bound specification (e.g. "FOR VALUES FROM ('2024-01-01') TO ('2024-02-01')").
+    public let boundSpec: String
+    public let sizeBytes: Int64
+    public let estimatedRows: Int
+
+    public init(schemaName: String, partitionName: String, boundSpec: String, sizeBytes: Int64, estimatedRows: Int) {
+        self.schemaName = schemaName
+        self.partitionName = partitionName
+        self.boundSpec = boundSpec
+        self.sizeBytes = sizeBytes
+        self.estimatedRows = estimatedRows
+    }
+}
+
+/// Inheritance relationship information (parent or child).
+public struct PostgresInheritanceInfo: Sendable {
+    public let schemaName: String
+    public let tableName: String
+
+    public init(schemaName: String, tableName: String) {
+        self.schemaName = schemaName
+        self.tableName = tableName
     }
 }
 

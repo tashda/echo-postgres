@@ -1,12 +1,16 @@
 import Foundation
 import Logging
-import PostgresWire
+import PGLibpq
 
-/// High-level bulk data movement (COPY) operations.
-public struct PostgresBulkCopy: @unchecked Sendable {
+/// High-level bulk data movement (COPY) operations, through libpq's COPY protocol: every format
+/// (CSV, text, binary) goes to and from the server unchanged.
+public struct PostgresBulkCopy: Sendable {
     public struct Options: Sendable {
+        /// Size of the chunks ``copyOut(sql:)`` yields.
         public var chunkSizeBytes: Int = 64 * 1024
+        /// Unused since `copyIn` uses the COPY protocol; kept for source compatibility.
         public var insertBatchSize: Int = 500
+        /// Unused: the statement's own `NULL` option applies; kept for source compatibility.
         public var nullString: String? = nil
         public init(chunkSizeBytes: Int = 64 * 1024, insertBatchSize: Int = 500, nullString: String? = nil) {
             self.chunkSizeBytes = chunkSizeBytes
@@ -25,112 +29,91 @@ public struct PostgresBulkCopy: @unchecked Sendable {
         self.options = options
     }
 
-    /// Execute COPY ... TO STDOUT and return an async byte stream.
+    /// Runs `COPY table|(query) TO STDOUT` (any format) and streams the server's output.
     public func copyOut(sql: String) async throws -> AsyncThrowingStream<Data, Error> {
         let parsed = try CopyStatement.parse(sql: sql)
         guard parsed.direction == .out else { throw PostgresKitError.notSupported("Expected COPY ... TO STDOUT") }
-        guard parsed.format == .csv else { throw PostgresKitError.notSupported("Only CSV format supported") }
-
         let chunkSize = max(16 * 1024, options.chunkSizeBytes)
+        let client = self.client
         return AsyncThrowingStream<Data, Error> { continuation in
-            Task {
+            let task = Task(name: "postgres-copy-out") {
                 do {
-                    var buffer = Data(); buffer.reserveCapacity(chunkSize)
-                    var wroteHeader = false
-                    let selectSQL = try await parsed.selectSQL(usingClient: client)
-                    let rows = try await client.simpleQuery(selectSQL)
-                    for try await row in rows {
-                        if parsed.header && !wroteHeader {
-                            buffer.append(Self.csvLine(row.map { $0.columnName }))
-                            wroteHeader = true
-                        }
-                        var fields: [String] = []
-                        for cell in row {
-                            if var bb = cell.bytes, let data = bb.readData(length: bb.readableBytes) {
-                                fields.append(String(data: data, encoding: .utf8) ?? (options.nullString ?? ""))
-                            } else { fields.append(options.nullString ?? "") }
-                        }
-                        buffer.append(Self.csvLine(fields))
-                        if buffer.count >= chunkSize {
-                            continuation.yield(buffer)
-                            buffer.removeAll(keepingCapacity: true)
-                        }
+                    try await client.withConnection { connection in
+                        try await PostgresBulkCopy.copyOut(sql, on: connection.connection, chunkSize: chunkSize) { continuation.yield($0) }
                     }
-                    if !buffer.isEmpty { continuation.yield(buffer) }
                     continuation.finish()
-                } catch { continuation.finish(throwing: error) }
+                } catch {
+                    continuation.finish(throwing: PostgresError.from(error))
+                }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
-    /// Execute COPY ... FROM STDIN consuming an async byte stream.
+    /// Runs `COPY table [(columns)] FROM STDIN` (any format), streaming `source` to the server. The
+    /// load is one statement: either every row is stored or none is.
     public func copyIn<S: AsyncSequence>(sql: String, source: S) async throws where S.Element == Data {
-        var parsed = try CopyStatement.parse(sql: sql)
-        guard parsed.direction == .`in` else { throw PostgresKitError.notSupported("Expected COPY ... FROM STDIN") }
-        guard parsed.format == .csv else { throw PostgresKitError.notSupported("Only CSV format supported") }
-
-        let (schema, table) = try parsed.resolveTable()
-        let columns = try await client.introspection.listColumns(schema: schema ?? "public", table: table)
-        let columnList = columns.map { CopyStatement.quoteIdent($0.name) }.joined(separator: ", ")
-        let insertPrefix = "INSERT INTO \(CopyStatement.qualify(schema: schema, table: table)) (\(columnList)) VALUES "
-
-        var accumulator = Data()
-        var rows: [[String?]] = []
-        let batchSize = max(50, options.insertBatchSize)
-
-        func flushBatch() async throws {
-            guard !rows.isEmpty else { return }
-            var valuesSQL: [String] = []
-            for row in rows {
-                var literals: [String] = []
-                for (idx, value) in row.enumerated() {
-                    if let value {
-                        let escaped = value.replacingOccurrences(of: "'", with: "''")
-                        let cast = idx < columns.count ? "::\(columns[idx].dataType)" : ""
-                        literals.append("'\(escaped)'\(cast)")
-                    } else {
-                        literals.append("NULL")
-                    }
-                }
-                valuesSQL.append("(\(literals.joined(separator: ", ")))")
-            }
-            let sql = insertPrefix + valuesSQL.joined(separator: ", ")
-            _ = try await client.executeDDL(sql)
-            rows.removeAll(keepingCapacity: true)
+        let parsed = try CopyStatement.parse(sql: sql)
+        guard parsed.direction == .in, parsed.table != nil else {
+            throw PostgresKitError.notSupported("Expected COPY table FROM STDIN")
         }
-
-        let parser = CSVParser(delimiter: parsed.delimiter, nullString: parsed.nullString ?? options.nullString, quote: parsed.quote)
-        for try await chunk in source {
-            accumulator.append(chunk)
-            while let lineRange = accumulator.firstLineRange() {
-                let lineData = accumulator[lineRange]
-                accumulator.removeSubrange(lineRange)
-                if parsed.header { parsed.header = false; continue }
-                if let line = String(data: lineData, encoding: .utf8)?
-                    .trimmingCharacters(in: .newlines), !line.isEmpty {
-                    rows.append(parser.parseLine(line))
-                    if rows.count >= batchSize { try await flushBatch() }
-                }
+        do {
+            try await client.withConnection { connection in
+                try await PostgresBulkCopy.copyIn(sql, on: connection.connection, source: source)
             }
+        } catch {
+            throw PostgresError.from(error)
         }
-        if !rows.isEmpty { try await flushBatch() }
     }
 
-    private static func csvLine(_ fields: [String]) -> Data {
-        let line = fields.map { f in
-            if f.isEmpty { return "" }
-            let needsQuotes = f.contains(",") || f.contains("\n") || f.contains("\r") || f.contains("\"")
-            var s = f.replacingOccurrences(of: "\"", with: "\"\"")
-            if needsQuotes { s = "\"" + s + "\"" }
-            return s
-        }.joined(separator: ",") + "\n"
-        return Data(line.utf8)
+    /// COPY TO STDOUT on one connection, handing over chunks of about `chunkSize` bytes.
+    static func copyOut(_ sql: String, on connection: PGConnection, chunkSize: Int, yield: (Data) -> Void) async throws {
+        try await connection.send(sql, chunkSize: 1)
+        guard let start = try await connection.nextResult() else { throw PostgresError(message: "COPY returned nothing") }
+        guard start.status == .copyOut else {
+            try? await connection.drain()
+            throw start.error.map { PostgresError(server: $0) } ?? PostgresError(message: "Expected COPY ... TO STDOUT")
+        }
+        var buffer = Data()
+        buffer.reserveCapacity(chunkSize)
+        while let row = try await connection.getCopyData() {
+            buffer.append(row)
+            if buffer.count >= chunkSize {
+                yield(buffer)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+        if !buffer.isEmpty { yield(buffer) }
+        try await finish(on: connection)
     }
-}
 
-private extension Data {
-    func firstLineRange() -> Range<Data.Index>? {
-        if let idx = self.firstIndex(of: 0x0A) { return startIndex..<index(after: idx) }
-        return nil
+    /// COPY FROM STDIN on one connection. A failure while reading `source` aborts the COPY.
+    static func copyIn<S: AsyncSequence>(_ sql: String, on connection: PGConnection, source: S) async throws where S.Element == Data {
+        try await connection.send(sql, chunkSize: 1)
+        guard let start = try await connection.nextResult() else { throw PostgresError(message: "COPY returned nothing") }
+        guard start.status == .copyIn else {
+            try? await connection.drain()
+            throw start.error.map { PostgresError(server: $0) } ?? PostgresError(message: "Expected COPY table FROM STDIN")
+        }
+        do {
+            for try await chunk in source where !chunk.isEmpty {
+                try await connection.putCopyData(chunk)
+            }
+        } catch {
+            try await connection.endCopy(failing: "Echo stopped the import: \(error.localizedDescription)")
+            try? await connection.drain()
+            throw error
+        }
+        try await connection.endCopy()
+        try await finish(on: connection)
+    }
+
+    /// Reads the COPY's final result; its error, if any, throws.
+    private static func finish(on connection: PGConnection) async throws {
+        var failure: PostgresError?
+        while let result = try await connection.nextResult() {
+            if result.status == .error, failure == nil { failure = result.error.map { PostgresError(server: $0) } }
+        }
+        if let failure { throw failure }
     }
 }

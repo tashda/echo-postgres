@@ -1,4 +1,3 @@
-import PostgresWire
 
 /// Type of an object in the schema summary.
 public enum SummaryObjectType: String, Sendable {
@@ -38,7 +37,7 @@ public struct SchemaSummary: Sendable {
 }
 
 /// High-level schema summary discovery.
-public extension PostgresIntrospectionClient {
+public extension PostgresMetadataClient {
     /// Generate a summary of all objects within a schema.
     func schemaSummary(
         schema: String,
@@ -53,7 +52,7 @@ public extension PostgresIntrospectionClient {
             ORDER BY table_type, table_name
             """
         let tableRows = try await client.withConnection { conn in
-            try await conn.queryPreparedRows(tableSQL, binds: [client.toPGData(value: schema)])
+            try await conn.queryPreparedRows(tableSQL, binds: [client.bind(schema)])
         }
         var entries: [(String, SummaryObjectType)] = []
         for row in tableRows {
@@ -63,19 +62,19 @@ public extension PostgresIntrospectionClient {
 
         // Materialized views
         let matRows = try await client.withConnection { conn in
-            try await conn.queryPreparedRows("SELECT matviewname FROM pg_matviews WHERE schemaname = $1 ORDER BY matviewname", binds: [client.toPGData(value: schema)])
+            try await conn.queryPreparedRows("SELECT matviewname FROM pg_matviews WHERE schemaname = $1 ORDER BY matviewname", binds: [client.bind(schema)])
         }
         let matNames: [String] = try matRows.map { try $0.decode(String.self) }
 
         // Functions
         let fnRows = try await client.withConnection { conn in
-            try await conn.queryPreparedRows("SELECT routine_name FROM information_schema.routines WHERE specific_schema = $1 AND routine_type = 'FUNCTION' ORDER BY routine_name", binds: [client.toPGData(value: schema)])
+            try await conn.queryPreparedRows("SELECT routine_name FROM information_schema.routines WHERE specific_schema = $1 AND routine_type = 'FUNCTION' ORDER BY routine_name", binds: [client.bind(schema)])
         }
         let functionNames: [String] = try fnRows.map { try $0.decode(String.self) }
 
         // Procedures (PG 11+)
         let procRows = try await client.withConnection { conn in
-            try await conn.queryPreparedRows("SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = $1 AND p.prokind = 'p' ORDER BY p.proname", binds: [client.toPGData(value: schema)])
+            try await conn.queryPreparedRows("SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = $1 AND p.prokind = 'p' ORDER BY p.proname", binds: [client.bind(schema)])
         }
         let procedureNames: [String] = try procRows.map { try $0.decode(String.self) }
 
@@ -85,7 +84,7 @@ public extension PostgresIntrospectionClient {
             FROM information_schema.triggers WHERE trigger_schema = $1 ORDER BY trigger_name
             """
         let trigRows = try await client.withConnection { conn in
-            try await conn.queryPreparedRows(trigSQL, binds: [client.toPGData(value: schema)])
+            try await conn.queryPreparedRows(trigSQL, binds: [client.bind(schema)])
         }
         var triggerEntries: [(String, String, String, String)] = []
         for row in trigRows { triggerEntries.append(try row.decode((String, String, String, String).self)) }

@@ -104,11 +104,20 @@ extension PostgresInsertValue: ExpressibleByNilLiteral {
 }
 
 internal func quoteLiteralSQL(_ literal: String) -> String {
-    "'\(literal.replacingOccurrences(of: "'", with: "''"))'"
+    "\(PostgresQuoting.quoteLiteral(literal))"
 }
 
+/// A type name for a cast. Plain names keep SQL's own spelling, so `integer`, `double precision`,
+/// `numeric(10,2)`, `text[]` and `sales.address` work (quoting them would ask for a type named
+/// `"integer"` or `"text[]"`); anything else is quoted. Names of several words are only SQL's own
+/// (`double precision`, `character varying`, `bit varying`, `… with time zone`): any other words
+/// would be SQL, not a type name.
 internal func quoteTypeNameSQL(_ typeName: String) -> String {
-    typeName.split(separator: ".", maxSplits: 1)
+    let identifier = "[A-Za-z_][A-Za-z0-9_]*"
+    let base = "(double precision|(national )?char(acter)? varying|national char(acter)?|bit varying|\(identifier)(\\.\(identifier))?)"
+    let plain = "^\(base)(\\([0-9 ,]+\\))?( with(out)? time zone)?(\\[[0-9]*\\])*$"
+    if typeName.range(of: plain, options: [.regularExpression, .caseInsensitive]) != nil { return typeName }
+    return typeName.split(separator: ".", maxSplits: 1)
         .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
         .joined(separator: ".")
 }

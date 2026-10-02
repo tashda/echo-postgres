@@ -1,11 +1,10 @@
-import PostgresWire
 
 /// Server configuration management.
-public extension PostgresAdminClient {
+public extension PostgresServerConfigClient {
     /// Set a server configuration parameter.
     @discardableResult
     func set(_ parameter: String, value: String, local: Bool = false) async throws -> Int {
-        let sql = "SET\(local ? " LOCAL" : "") \(client.quoteIdentifier(parameter)) TO '\(value.replacingOccurrences(of: "'", with: "''"))'"
+        let sql = "SET\(local ? " LOCAL" : "") \(client.quoteIdentifier(parameter)) TO \(PostgresQuoting.quoteLiteral(value))"
         return try await client.executeDDL(sql)
     }
 

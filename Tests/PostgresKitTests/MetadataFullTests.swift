@@ -1,6 +1,6 @@
 import XCTest
 import Logging
-@testable import PostgresKit
+import PostgresKit
 
 private actor ProgressCounter {
     private(set) var value = 0
@@ -11,11 +11,9 @@ private actor ProgressCounter {
 /// Tests all public methods not already covered by MetadataIntegrationTests.swift.
 final class MetadataFullTests: PostgresKitTestCase {
     private var client: PostgresKit.PostgresClient!
-    private let meta = PostgresMetadata()
 
     override func setUp() async throws {
         try await super.setUp()
-        TestEnv.loadDotEnv()
         guard TestEnv.isConfigured else {
             throw XCTSkip("POSTGRES_HOST not set. Copy .env.example to .env and configure connection.")
         }
@@ -38,7 +36,7 @@ final class MetadataFullTests: PostgresKitTestCase {
     // MARK: - listDatabases
 
     func testListDatabases() async throws {
-        let dbs = try await meta.listDatabases(using: client)
+        let dbs = try await client.metadata.listDatabases()
         XCTAssertFalse(dbs.isEmpty, "Should return at least one database")
         XCTAssertTrue(dbs.contains(TestEnv.database), "Connected database should be in list")
     }
@@ -46,12 +44,13 @@ final class MetadataFullTests: PostgresKitTestCase {
     // MARK: - listSchemas
 
     func testListSchemas() async throws {
-        let schemas = try await meta.listSchemas(using: client)
+        let schemas = try await client.metadata.listSchemas()
+        let schemaNames = schemas.map(\.name)
         // At minimum, 'public' should be present unless it was removed
-        XCTAssertFalse(schemas.isEmpty, "Should have at least one schema")
+        XCTAssertFalse(schemaNames.isEmpty, "Should have at least one schema")
         // System schemas are excluded
-        XCTAssertFalse(schemas.contains("pg_catalog"), "pg_catalog should be excluded")
-        XCTAssertFalse(schemas.contains("information_schema"), "information_schema should be excluded")
+        XCTAssertFalse(schemaNames.contains("pg_catalog"), "pg_catalog should be excluded")
+        XCTAssertFalse(schemaNames.contains("information_schema"), "information_schema should be excluded")
     }
 
     // MARK: - listColumns
@@ -69,7 +68,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             }
         }
 
-        let columns = try await meta.listColumns(using: client, schema: "public", table: table)
+        let columns = try await client.metadata.listColumns(schema: "public", table: table)
         XCTAssertEqual(columns.count, 3)
         let names = columns.map { $0.name }
         XCTAssertTrue(names.contains("id"))
@@ -93,17 +92,17 @@ final class MetadataFullTests: PostgresKitTestCase {
             .text(name: "name"),
             .integer(name: "score")
         ])
-        try await client.admin.createIndex(name: idx, table: table, columns: ["name"])
-        try await client.admin.createIndex(name: "\(idx)_unique", table: table, columns: ["score"], unique: true)
+        try await client.indexes.createIndex(name: idx, table: table, columns: ["name"])
+        try await client.indexes.createIndex(name: "\(idx)_unique", table: table, columns: ["score"], unique: true)
         defer {
             Task { [client = self.client!] in
                 _ = try? await client.admin.dropTable(name: table, ifExists: true)
             }
         }
 
-        let indexes: [PostgresMetadata.Index]
+        let indexes: [PostgresIndexInfo]
         do {
-            indexes = try await meta.listIndexes(using: client, schema: "public", table: table)
+            indexes = try await client.metadata.listIndexes(schema: "public", table: table)
         } catch {
             XCTFail("listIndexes failed: \(String(reflecting: error))")
             return
@@ -131,7 +130,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             }
         }
 
-        let pk = try await meta.primaryKey(using: client, schema: "public", table: table)
+        let pk = try await client.metadata.primaryKey(schema: "public", table: table)
         XCTAssertNotNil(pk, "Table with primary key should return a PrimaryKey")
         XCTAssertEqual(pk?.columns, ["id"])
     }
@@ -147,7 +146,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             }
         }
 
-        let pk = try await meta.primaryKey(using: client, schema: "public", table: table)
+        let pk = try await client.metadata.primaryKey(schema: "public", table: table)
         XCTAssertNil(pk, "Table without primary key should return nil")
     }
 
@@ -164,7 +163,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             .serial(name: "id", primaryKey: true),
             .integer(name: "parent_id")
         ])
-        try await client.admin.addForeignKey(table: child, column: "parent_id", referencesTable: parent, referencesColumn: "id")
+        try await client.constraints.addForeignKey(table: child, column: "parent_id", referencesTable: parent, referencesColumn: "id")
         defer {
             Task { [client = self.client!] in
                 _ = try? await client.admin.dropTable(name: child, ifExists: true, cascade: true)
@@ -172,7 +171,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             }
         }
 
-        let fks = try await meta.foreignKeys(using: client, schema: "public", table: child)
+        let fks = try await client.metadata.foreignKeys(schema: "public", table: child)
         XCTAssertEqual(fks.count, 1, "Child table should have 1 FK")
         let fk = fks[0]
         XCTAssertEqual(fk.columns, ["parent_id"])
@@ -190,14 +189,14 @@ final class MetadataFullTests: PostgresKitTestCase {
             PostgresColumnDefinition(name: "email", dataType: "TEXT", unique: true),
             .text(name: "code")
         ])
-        try await client.admin.addUniqueConstraint(table: table, columns: ["code"], constraintName: uqName)
+        try await client.constraints.addUniqueConstraint(table: table, columns: ["code"], constraintName: uqName)
         defer {
             Task { [client = self.client!] in
                 _ = try? await client.admin.dropTable(name: table, ifExists: true)
             }
         }
 
-        let constraints = try await meta.uniqueConstraints(using: client, schema: "public", table: table)
+        let constraints = try await client.metadata.uniqueConstraints(schema: "public", table: table)
         XCTAssertGreaterThanOrEqual(constraints.count, 2, "Should have at least 2 unique constraints")
         let colNames = constraints.flatMap { $0.columns }
         XCTAssertTrue(colNames.contains("email"))
@@ -216,7 +215,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             .serial(name: "id", primaryKey: true),
             .integer(name: "pid")
         ])
-        try await client.admin.addForeignKey(table: child, column: "pid", referencesTable: parent, referencesColumn: "id")
+        try await client.constraints.addForeignKey(table: child, column: "pid", referencesTable: parent, referencesColumn: "id")
         defer {
             Task { [client = self.client!] in
                 _ = try? await client.admin.dropTable(name: child, ifExists: true, cascade: true)
@@ -225,7 +224,7 @@ final class MetadataFullTests: PostgresKitTestCase {
         }
 
         // dependencies() returns tables that reference the given table
-        let deps = try await meta.dependencies(using: client, schema: "public", table: parent)
+        let deps = try await client.metadata.dependencies(schema: "public", table: parent)
         XCTAssertFalse(deps.isEmpty, "Parent table should have at least one dependent (the child)")
         let depTables = deps.map { $0.sourceTable }
         XCTAssertTrue(depTables.contains(child))
@@ -240,15 +239,15 @@ final class MetadataFullTests: PostgresKitTestCase {
             .serial(name: "id"),
             .text(name: "name")
         ])
-        try await client.admin.createView(name: view, query: "SELECT id, name FROM \(table) WHERE id > 0")
+        try await client.views.createView(name: view, query: "SELECT id, name FROM \(table) WHERE id > 0")
         defer {
             Task { [client = self.client!] in
-                _ = try? await client.admin.dropView(name: view, ifExists: true)
+                _ = try? await client.views.dropView(name: view, ifExists: true)
                 _ = try? await client.admin.dropTable(name: table, ifExists: true)
             }
         }
 
-        let def = try await meta.viewDefinition(using: client, schema: "public", view: view)
+        let def = try await client.metadata.viewDefinition(schema: "public", view: view)
         XCTAssertNotNil(def, "View definition should not be nil")
         XCTAssertTrue(def?.lowercased().contains("select") == true,
                       "View definition should contain SELECT")
@@ -258,7 +257,7 @@ final class MetadataFullTests: PostgresKitTestCase {
 
     func testFunctionDefinition() async throws {
         let fn = "pgwire_meta_fn_\(UInt32.random(in: 0..<UInt32.max))"
-        try await client.admin.createFunction(
+        try await client.routines.createFunction(
             name: fn,
             parameters: [PostgresFunctionParameter(name: "x", dataType: "integer")],
             returnType: "integer",
@@ -268,11 +267,11 @@ final class MetadataFullTests: PostgresKitTestCase {
         )
         defer {
             Task { [client = self.client!] in
-                _ = try? await client.admin.dropFunction(name: fn, parameters: ["integer"], ifExists: true)
+                _ = try? await client.routines.dropFunction(name: fn, parameters: ["integer"], ifExists: true)
             }
         }
 
-        let def = try await meta.functionDefinition(using: client, schema: "public", name: fn)
+        let def = try await client.metadata.functionDefinition(schema: "public", name: fn)
         XCTAssertNotNil(def, "Function definition should not be nil")
         XCTAssertTrue(def?.contains(fn) == true || def?.lowercased().contains("function") == true,
                       "Definition should contain the function name or 'FUNCTION'")
@@ -288,7 +287,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             .serial(name: "id"),
             .text(name: "val")
         ])
-        try await client.admin.createFunction(
+        try await client.routines.createFunction(
             name: fn,
             parameters: [],
             returnType: "trigger",
@@ -296,7 +295,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             language: .plpgsql,
             orReplace: true
         )
-        try await client.admin.createTrigger(
+        try await client.triggers.createTrigger(
             name: trig,
             table: table,
             event: .before,
@@ -305,13 +304,13 @@ final class MetadataFullTests: PostgresKitTestCase {
         )
         defer {
             Task { [client = self.client!] in
-                _ = try? await client.admin.dropTrigger(name: trig, table: table, ifExists: true)
+                _ = try? await client.triggers.dropTrigger(name: trig, table: table, ifExists: true)
                 _ = try? await client.admin.dropTable(name: table, ifExists: true)
-                _ = try? await client.admin.dropFunction(name: fn, parameters: [], ifExists: true)
+                _ = try? await client.routines.dropFunction(name: fn, parameters: [], ifExists: true)
             }
         }
 
-        let def = try await meta.triggerDefinition(using: client, schema: "public", name: trig)
+        let def = try await client.metadata.triggerDefinition(schema: "public", name: trig)
         XCTAssertNotNil(def, "Trigger definition should not be nil")
         XCTAssertTrue(def?.uppercased().contains("TRIGGER") == true,
                       "Trigger definition should contain TRIGGER")
@@ -320,7 +319,7 @@ final class MetadataFullTests: PostgresKitTestCase {
     // MARK: - listRoles
 
     func testListRoles() async throws {
-        let roles = try await meta.listRoles(using: client)
+        let roles = try await client.security.listRoles()
         XCTAssertFalse(roles.isEmpty, "Should return at least one role")
         // postgres superuser role always exists
         let roleNames = roles.map { $0.name }
@@ -331,7 +330,7 @@ final class MetadataFullTests: PostgresKitTestCase {
     // MARK: - listExtensions
 
     func testListExtensions() async throws {
-        let extensions = try await meta.listExtensions(using: client)
+        let extensions = try await client.metadata.listExtensions()
         // plpgsql is always installed by default
         XCTAssertFalse(extensions.isEmpty, "Should have at least plpgsql extension")
         let extNames = extensions.map { $0.name }
@@ -380,7 +379,7 @@ final class MetadataFullTests: PostgresKitTestCase {
 
     func testDatabaseComment() async throws {
         // This may return nil if no comment has been set — either is valid
-        let comment = try await meta.fetchDatabaseComment(using: client)
+        let comment = try await client.metadata.fetchDatabaseComment()
         _ = comment // nil or a string, both acceptable
     }
 
@@ -398,7 +397,7 @@ final class MetadataFullTests: PostgresKitTestCase {
             }
         }
 
-        let summary = try await meta.schemaSummary(using: client, schema: "public")
+        let summary = try await client.metadata.schemaSummary(schema: "public")
         XCTAssertEqual(summary.schema, "public")
 
         let tableObj = summary.objects.first { $0.name == table }
@@ -409,7 +408,7 @@ final class MetadataFullTests: PostgresKitTestCase {
 
     func testSchemaSummary_WithProgressCallback() async throws {
         let counter = ProgressCounter()
-        let summary = try await meta.schemaSummary(using: client, schema: "public") { _, _, _ in
+        let summary = try await client.metadata.schemaSummary(schema: "public") { _, _, _ in
             await counter.increment()
         }
         XCTAssertEqual(summary.schema, "public")

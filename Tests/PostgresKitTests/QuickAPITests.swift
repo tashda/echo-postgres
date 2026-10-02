@@ -53,7 +53,7 @@ final class QuickAPITests: PostgresKitTestCase {
             logger.info("createTable API successful")
 
             // Test insert API
-            _ = try await client.connection.insert(
+            _ = try await client.bulk.insert(
                 into: "quick_test",
                 columns: ["name"],
                 values: [["Test Record"]]
@@ -61,7 +61,7 @@ final class QuickAPITests: PostgresKitTestCase {
             logger.info("insert API successful")
 
             // Verify data exists
-            let result = try await client.connection.simpleQuery("SELECT COUNT(*)::text FROM quick_test")
+            let result = try await client.simpleQuery("SELECT COUNT(*)::text FROM quick_test")
             for try await count in result.decode(String.self) {
                 logger.info("Record count: \(count)")
                 XCTAssertEqual(count, "1")
@@ -83,24 +83,24 @@ final class QuickAPITests: PostgresKitTestCase {
 
         do {
             // Clean up first
-            _ = try await client.admin.dropSequence(name: "quick_test_seq", ifExists: true)
+            _ = try await client.sequences.dropSequence(name: "quick_test_seq", ifExists: true)
 
             // Test createSequence API
-            _ = try await client.admin.createSequence(name: "quick_test_seq")
+            _ = try await client.sequences.createSequence(name: "quick_test_seq")
             logger.info("createSequence API successful")
 
             // Test nextval API
-            let next1 = try await client.admin.nextval("quick_test_seq")
+            let next1 = try await client.sequences.nextval("quick_test_seq")
             logger.info("nextval API successful, first value: \(next1)")
 
-            let next2 = try await client.admin.nextval("quick_test_seq")
+            let next2 = try await client.sequences.nextval("quick_test_seq")
             logger.info("nextval API successful, second value: \(next2)")
 
             // Verify sequence increments
             XCTAssertEqual(next2, next1 + 1)
 
             // Clean up
-            _ = try await client.admin.dropSequence(name: "quick_test_seq", ifExists: false)
+            _ = try await client.sequences.dropSequence(name: "quick_test_seq", ifExists: false)
             logger.info("dropSequence API successful")
 
         } catch {

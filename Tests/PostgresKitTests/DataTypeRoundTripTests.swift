@@ -24,7 +24,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Read from SampleData numeric_types
 
     func testNumericTypesFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_smallint, col_integer, col_bigint FROM public.numeric_types WHERE col_smallint = 32767")
+        let rows = try await client.simpleQuery("SELECT col_smallint, col_integer, col_bigint FROM public.numeric_types WHERE col_smallint = 32767")
         var found = false
         for try await (s, i, b) in rows.decode((Int16, Int32, Int64).self) {
             XCTAssertEqual(s, 32767)
@@ -36,7 +36,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testNumericMinValues() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_smallint, col_integer, col_bigint FROM public.numeric_types WHERE col_smallint = -32768")
+        let rows = try await client.simpleQuery("SELECT col_smallint, col_integer, col_bigint FROM public.numeric_types WHERE col_smallint = -32768")
         var found = false
         for try await (s, i, b) in rows.decode((Int16, Int32, Int64).self) {
             XCTAssertEqual(s, -32768)
@@ -48,7 +48,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testNumericZeroValues() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_smallint, col_integer, col_bigint FROM public.numeric_types WHERE col_smallint = 0")
+        let rows = try await client.simpleQuery("SELECT col_smallint, col_integer, col_bigint FROM public.numeric_types WHERE col_smallint = 0")
         var found = false
         for try await (s, i, b) in rows.decode((Int16, Int32, Int64).self) {
             XCTAssertEqual(s, 0)
@@ -60,7 +60,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testNumericNullValues() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_smallint, col_integer, col_bigint FROM public.numeric_types WHERE col_smallint IS NULL")
+        let rows = try await client.simpleQuery("SELECT col_smallint, col_integer, col_bigint FROM public.numeric_types WHERE col_smallint IS NULL")
         var found = false
         for try await (s, i, b) in rows.decode((Int16?, Int32?, Int64?).self) {
             XCTAssertNil(s)
@@ -74,7 +74,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Text Types
 
     func testTextTypesFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_varchar, col_text FROM public.text_types WHERE col_varchar = 'Hello, World!'")
+        let rows = try await client.simpleQuery("SELECT col_varchar, col_text FROM public.text_types WHERE col_varchar = 'Hello, World!'")
         var found = false
         for try await (varchar, text) in rows.decode((String, String).self) {
             XCTAssertEqual(varchar, "Hello, World!")
@@ -85,7 +85,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testUnicodeTextRoundTrip() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_varchar FROM public.text_types WHERE col_varchar LIKE '%日本語%'")
+        let rows = try await client.simpleQuery("SELECT col_varchar FROM public.text_types WHERE col_varchar LIKE '%日本語%'")
         var found = false
         for try await v in rows.decode(String.self) {
             XCTAssertTrue(v.contains("日本語"))
@@ -96,7 +96,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testEmptyStringRoundTrip() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_varchar, col_text FROM public.text_types WHERE col_varchar = ''")
+        let rows = try await client.simpleQuery("SELECT col_varchar, col_text FROM public.text_types WHERE col_varchar = ''")
         var found = false
         for try await (v, t) in rows.decode((String, String).self) {
             XCTAssertEqual(v, "")
@@ -109,7 +109,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Boolean
 
     func testBooleanRoundTrip() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_boolean FROM public.special_types WHERE col_boolean IS NOT NULL ORDER BY id")
+        let rows = try await client.simpleQuery("SELECT col_boolean FROM public.special_types WHERE col_boolean IS NOT NULL ORDER BY id")
         var bools: [Bool] = []
         for try await b in rows.decode(Bool.self) { bools.append(b) }
         XCTAssertTrue(bools.contains(true))
@@ -119,7 +119,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - UUID
 
     func testUUIDRoundTrip() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_uuid FROM public.all_data_types WHERE col_uuid = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'")
+        let rows = try await client.simpleQuery("SELECT col_uuid FROM public.all_data_types WHERE col_uuid = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'")
         var found = false
         for try await uuid in rows.decode(UUID.self) {
             XCTAssertEqual(uuid, UUID(uuidString: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"))
@@ -131,14 +131,14 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Temporal Types
 
     func testDateRoundTrip() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_date FROM public.temporal_types WHERE col_date = '2024-01-15'")
+        let rows = try await client.simpleQuery("SELECT col_date FROM public.temporal_types WHERE col_date = '2024-01-15'")
         var found = false
         for try await _ in rows { found = true }
         XCTAssertTrue(found, "Should find the date value")
     }
 
     func testTimestampWithTimezone() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_timestamp_tz FROM public.temporal_types WHERE col_date = '2024-01-15'")
+        let rows = try await client.simpleQuery("SELECT col_timestamp_tz FROM public.temporal_types WHERE col_date = '2024-01-15'")
         var found = false
         for try await _ in rows { found = true }
         XCTAssertTrue(found, "Should find timestamp with timezone")
@@ -147,7 +147,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - JSON / JSONB
 
     func testJSONBFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_jsonb->>'name' FROM public.json_types WHERE col_jsonb->>'name' = 'Alice'")
+        let rows = try await client.simpleQuery("SELECT col_jsonb->>'name' FROM public.json_types WHERE col_jsonb->>'name' = 'Alice'")
         var found = false
         for try await name in rows.decode(String.self) {
             XCTAssertEqual(name, "Alice")
@@ -157,7 +157,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testNestedJSONBAccess() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_jsonb->'users'->0->>'name' FROM public.json_types WHERE col_jsonb ? 'users'")
+        let rows = try await client.simpleQuery("SELECT col_jsonb->'users'->0->>'name' FROM public.json_types WHERE col_jsonb ? 'users'")
         var found = false
         for try await name in rows.decode(String.self) {
             XCTAssertEqual(name, "Alice")
@@ -169,7 +169,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Network Types
 
     func testInetFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_inet::text FROM public.network_types WHERE col_inet = '192.168.1.1'")
+        let rows = try await client.simpleQuery("SELECT col_inet::text FROM public.network_types WHERE col_inet = '192.168.1.1'")
         var found = false
         for try await ip in rows.decode(String.self) {
             XCTAssertTrue(ip.contains("192.168.1.1"))
@@ -179,7 +179,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testIPv6Inet() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_inet::text FROM public.network_types WHERE col_inet = '::1'")
+        let rows = try await client.simpleQuery("SELECT col_inet::text FROM public.network_types WHERE col_inet = '::1'")
         var found = false
         for try await ip in rows.decode(String.self) {
             XCTAssertTrue(ip.contains("::1"))
@@ -191,7 +191,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Array Types
 
     func testIntegerArrayFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int_arr::text FROM public.array_types WHERE col_int_arr = '{1,2,3,4,5}'")
+        let rows = try await client.simpleQuery("SELECT col_int_arr::text FROM public.array_types WHERE col_int_arr = '{1,2,3,4,5}'")
         var found = false
         for try await arr in rows.decode(String.self) {
             XCTAssertEqual(arr, "{1,2,3,4,5}")
@@ -201,7 +201,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testEmptyArrayFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int_arr::text FROM public.array_types WHERE col_int_arr = '{}'")
+        let rows = try await client.simpleQuery("SELECT col_int_arr::text FROM public.array_types WHERE col_int_arr = '{}'")
         var found = false
         for try await arr in rows.decode(String.self) {
             XCTAssertEqual(arr, "{}")
@@ -213,7 +213,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Range Types
 
     func testInt4RangeFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range = '[1,10)'")
+        let rows = try await client.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range = '[1,10)'")
         var found = false
         for try await r in rows.decode(String.self) {
             XCTAssertEqual(r, "[1,10)")
@@ -223,7 +223,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     }
 
     func testEmptyRangeFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range = 'empty'")
+        let rows = try await client.simpleQuery("SELECT col_int4range::text FROM public.range_types WHERE col_int4range = 'empty'")
         var found = false
         for try await r in rows.decode(String.self) {
             XCTAssertEqual(r, "empty")
@@ -235,7 +235,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Full-Text Search Types
 
     func testTSVectorFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT col_text FROM public.fulltext_types WHERE col_tsvector @@ to_tsquery('english', 'quick & fox')")
+        let rows = try await client.simpleQuery("SELECT col_text FROM public.fulltext_types WHERE col_tsvector @@ to_tsquery('english', 'quick & fox')")
         var found = false
         for try await text in rows.decode(String.self) {
             XCTAssertTrue(text.contains("quick"))
@@ -247,7 +247,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - Binary Types
 
     func testByteaFromSampleData() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT length(col_bytea) FROM public.binary_types WHERE col_bytea IS NOT NULL ORDER BY id LIMIT 1")
+        let rows = try await client.simpleQuery("SELECT length(col_bytea) FROM public.binary_types WHERE col_bytea IS NOT NULL ORDER BY id LIMIT 1")
         var found = false
         for try await len in rows.decode(Int.self) {
             XCTAssertGreaterThan(len, 0)
@@ -263,9 +263,9 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
         defer { Task { [client = self.client!] in try? await client.admin.dropTable(name: table, ifExists: true) } }
 
         try await client.admin.createTable(name: table, columns: [.integer(name: "val")])
-        _ = try await client.connection.insert(into: table, columns: ["val"], values: [[42]])
+        _ = try await client.bulk.insert(into: table, columns: ["val"], values: [[42]])
 
-        let rows = try await client.connection.simpleQuery("SELECT val FROM \(table)")
+        let rows = try await client.simpleQuery("SELECT val FROM \(table)")
         var found = false
         for try await v in rows.decode(Int.self) {
             XCTAssertEqual(v, 42)
@@ -279,9 +279,9 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
         defer { Task { [client = self.client!] in try? await client.admin.dropTable(name: table, ifExists: true) } }
 
         try await client.admin.createTable(name: table, columns: [.text(name: "val")])
-        _ = try await client.connection.insert(into: table, columns: ["val"], values: [["Hello 日本語 🎉"]])
+        _ = try await client.bulk.insert(into: table, columns: ["val"], values: [["Hello 日本語 🎉"]])
 
-        let rows = try await client.connection.simpleQuery("SELECT val FROM \(table)")
+        let rows = try await client.simpleQuery("SELECT val FROM \(table)")
         var found = false
         for try await v in rows.decode(String.self) {
             XCTAssertEqual(v, "Hello 日本語 🎉")
@@ -296,9 +296,9 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
 
         let uuid = UUID()
         try await client.admin.createTable(name: table, columns: [.uuid(name: "val")])
-        _ = try await client.connection.insert(into: table, columns: ["val"], values: [[uuid]])
+        _ = try await client.bulk.insert(into: table, columns: ["val"], values: [[uuid]])
 
-        let rows = try await client.connection.simpleQuery("SELECT val FROM \(table)")
+        let rows = try await client.simpleQuery("SELECT val FROM \(table)")
         var found = false
         for try await v in rows.decode(UUID.self) {
             XCTAssertEqual(v, uuid)
@@ -312,9 +312,9 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
         defer { Task { [client = self.client!] in try? await client.admin.dropTable(name: table, ifExists: true) } }
 
         try await client.admin.createTable(name: table, columns: [.boolean(name: "val")])
-        _ = try await client.connection.insert(into: table, columns: ["val"], values: [[true], [false]])
+        _ = try await client.bulk.insert(into: table, columns: ["val"], values: [[true], [false]])
 
-        let rows = try await client.connection.simpleQuery("SELECT val FROM \(table) ORDER BY val")
+        let rows = try await client.simpleQuery("SELECT val FROM \(table) ORDER BY val")
         var bools: [Bool] = []
         for try await b in rows.decode(Bool.self) { bools.append(b) }
         XCTAssertEqual(bools, [false, true])
@@ -325,9 +325,9 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
         defer { Task { [client = self.client!] in try? await client.admin.dropTable(name: table, ifExists: true) } }
 
         try await client.admin.createTable(name: table, columns: [.date(name: "val")])
-        _ = try await client.connection.insert(into: table, columns: ["val"], values: [[Date(timeIntervalSince1970: 0)]])
+        _ = try await client.bulk.insert(into: table, columns: ["val"], values: [[Date(timeIntervalSince1970: 0)]])
 
-        let rows = try await client.connection.simpleQuery("SELECT val::text FROM \(table)")
+        let rows = try await client.simpleQuery("SELECT val::text FROM \(table)")
         var found = false
         for try await v in rows.decode(String.self) {
             XCTAssertEqual(v, "1970-01-01")
@@ -339,7 +339,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     // MARK: - All-types Row
 
     func testAllDataTypesRowIsComplete() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT col_smallint, col_integer, col_bigint, col_boolean, col_varchar, col_uuid::text, col_mood::text
             FROM public.all_data_types WHERE col_uuid = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
         """)
@@ -360,7 +360,7 @@ final class DataTypeRoundTripTests: PostgresKitTestCase {
     func testAllNullRow() async throws {
         // The second row in all_data_types has only col_smallint=1; col_integer/col_varchar are NULL,
         // but col_boolean has DEFAULT false and col_uuid has DEFAULT uuid_generate_v4().
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT col_integer, col_varchar, col_text, col_bigint FROM public.all_data_types
             WHERE col_smallint = 1 AND col_integer IS NULL
         """)

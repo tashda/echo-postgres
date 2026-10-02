@@ -8,7 +8,6 @@ final class UserManagementTests: PostgresKitTestCase {
     private var testLogger: Logger!
 
     override func setUp() async throws {
-        TestEnv.loadDotEnv()
         guard TestEnv.isConfigured else {
             throw XCTSkip("POSTGRES_HOST not set. Copy .env.example to .env and configure connection.")
         }
@@ -55,13 +54,13 @@ final class UserManagementTests: PostgresKitTestCase {
         let superName = "super_\(s)"
         await dropRoleIfExists(superName)
 
-        defer {
-            Task.detached { [client] in
-                for r in roleNames {
-                    _ = try? await client?.security.dropRole(name: r, ifExists: true)
-                }
-                _ = try? await client?.security.dropRole(name: superName, ifExists: true)
+        addTeardownBlock { [client] in
+            for r in roleNames {
+                try? await client?.security.dropOwned(by: r)
+                _ = try? await client?.security.dropRole(name: r, ifExists: true)
             }
+            try? await client?.security.dropOwned(by: superName)
+            _ = try? await client?.security.dropRole(name: superName, ifExists: true)
         }
 
         let allRoles = roleNames + [superName]
@@ -80,7 +79,7 @@ final class UserManagementTests: PostgresKitTestCase {
 
         // Verify roles exist
         let nameList = allRoles.joined(separator: "','")
-        let verifyRows = try await client.connection.simpleQuery("""
+        let verifyRows = try await client.simpleQuery("""
             SELECT rolname FROM pg_roles WHERE rolname = ANY(ARRAY['\(nameList)'])
         """)
         var verified: [String] = []
@@ -92,7 +91,7 @@ final class UserManagementTests: PostgresKitTestCase {
             try await client.security.dropRole(name: r, ifExists: true)
         }
 
-        let afterRows = try await client.connection.simpleQuery("""
+        let afterRows = try await client.simpleQuery("""
             SELECT rolname FROM pg_roles WHERE rolname = ANY(ARRAY['\(nameList)'])
         """)
         var remaining: [String] = []
@@ -108,11 +107,11 @@ final class UserManagementTests: PostgresKitTestCase {
         let renamedName = "renamed_\(suffix)"
         await dropUserIfExists(renamedName)
 
-        defer {
-            Task.detached { [client] in
-                _ = try? await client?.security.dropUser(name: renamedName, ifExists: true)
-                _ = try? await client?.security.dropUser(name: userName, ifExists: true)
-            }
+        addTeardownBlock { [client] in
+            try? await client?.security.dropOwned(by: renamedName)
+            _ = try? await client?.security.dropUser(name: renamedName, ifExists: true)
+            try? await client?.security.dropOwned(by: userName)
+            _ = try? await client?.security.dropUser(name: userName, ifExists: true)
         }
 
         try await client.security.createRole(name: userName, password: "attrpass123", login: true, connectionLimit: 5)
@@ -120,7 +119,7 @@ final class UserManagementTests: PostgresKitTestCase {
         try await client.security.alterUser(name: userName, rename: renamedName)
         try await client.security.alterUser(name: renamedName, validUntil: "infinity")
 
-        let userRows = try await client.connection.simpleQuery("""
+        let userRows = try await client.simpleQuery("""
             SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname = '\(renamedName)'
         """)
         var found = false
@@ -145,11 +144,10 @@ final class UserManagementTests: PostgresKitTestCase {
 
         for n in allNames { await dropRoleIfExists(n) }
 
-        defer {
-            Task.detached { [client] in
-                for n in allNames {
-                    _ = try? await client?.security.dropRole(name: n, ifExists: true)
-                }
+        addTeardownBlock { [client] in
+            for n in allNames {
+                try? await client?.security.dropOwned(by: n)
+                _ = try? await client?.security.dropRole(name: n, ifExists: true)
             }
         }
 
@@ -164,7 +162,7 @@ final class UserManagementTests: PostgresKitTestCase {
         try await client.security.grantRole(role: deptEng, to: bob)
         try await client.security.grantRole(role: deptSales, to: bob)
 
-        let membershipRows = try await client.connection.simpleQuery("""
+        let membershipRows = try await client.simpleQuery("""
             SELECT ur1.rolname AS user_role, ur2.rolname AS role_membership
             FROM pg_roles ur1
             JOIN pg_auth_members pam ON ur1.oid = pam.member
@@ -195,12 +193,12 @@ final class UserManagementTests: PostgresKitTestCase {
         await dropRoleIfExists(userName)
         await dropRoleIfExists(roleName)
 
-        defer {
-            Task.detached { [client] in
-                _ = try? await client?.admin.dropSchema(name: schemaName, ifExists: true, cascade: true)
-                _ = try? await client?.security.dropUser(name: userName, ifExists: true)
-                _ = try? await client?.security.dropRole(name: roleName, ifExists: true)
-            }
+        addTeardownBlock { [client] in
+            _ = try? await client?.admin.dropSchema(name: schemaName, ifExists: true, cascade: true)
+            try? await client?.security.dropOwned(by: userName)
+            _ = try? await client?.security.dropUser(name: userName, ifExists: true)
+            try? await client?.security.dropOwned(by: roleName)
+            _ = try? await client?.security.dropRole(name: roleName, ifExists: true)
         }
 
         try await client.security.createRole(name: roleName)
@@ -221,7 +219,7 @@ final class UserManagementTests: PostgresKitTestCase {
             columns: [.serial(name: "id", primaryKey: true), .text(name: "name")]
         )
 
-        let aclRows = try await client.connection.simpleQuery("""
+        let aclRows = try await client.simpleQuery("""
             SELECT privilege_type
             FROM information_schema.role_table_grants
             WHERE table_schema = '\(schemaName)' AND table_name = 'test_tbl' AND grantee = '\(roleName)'
@@ -247,12 +245,12 @@ final class UserManagementTests: PostgresKitTestCase {
         await dropUserIfExists(alice)
         await dropUserIfExists(bob)
 
-        defer {
-            Task.detached { [client] in
-                _ = try? await client?.admin.dropTable(name: table, ifExists: true)
-                _ = try? await client?.security.dropUser(name: alice, ifExists: true)
-                _ = try? await client?.security.dropUser(name: bob, ifExists: true)
-            }
+        addTeardownBlock { [client] in
+            _ = try? await client?.admin.dropTable(name: table, ifExists: true)
+            try? await client?.security.dropOwned(by: alice)
+            _ = try? await client?.security.dropUser(name: alice, ifExists: true)
+            try? await client?.security.dropOwned(by: bob)
+            _ = try? await client?.security.dropUser(name: bob, ifExists: true)
         }
 
         try await client.admin.createTable(name: table, columns: [
@@ -265,7 +263,7 @@ final class UserManagementTests: PostgresKitTestCase {
         try await client.security.createUser(name: alice, password: "alice123")
         try await client.security.createUser(name: bob, password: "bob123")
 
-        try await client.connection.insert(into: table, columns: ["owner", "category", "data"], values: [
+        try await client.bulk.insert(into: table, columns: ["owner", "category", "data"], values: [
             ["alice", "personal", "Alice personal data"],
             ["bob", "work", "Bob work data"],
             ["alice", "public", "Alice public data"],
@@ -289,7 +287,7 @@ final class UserManagementTests: PostgresKitTestCase {
         )
 
         // Verify policies exist
-        let policyRows = try await client.connection.simpleQuery("""
+        let policyRows = try await client.simpleQuery("""
             SELECT policyname, cmd FROM pg_policies WHERE tablename = '\(table)' ORDER BY policyname
         """)
 
@@ -301,7 +299,7 @@ final class UserManagementTests: PostgresKitTestCase {
         XCTAssertEqual(policies.count, 2, "Should have 2 RLS policies")
 
         // Verify data count (as superuser, sees all rows)
-        let countRows = try await client.connection.simpleQuery("SELECT COUNT(*)::text FROM \(table)")
+        let countRows = try await client.simpleQuery("SELECT COUNT(*)::text FROM \(table)")
         var totalCount = 0
         for try await countStr in countRows.decode(String.self) {
             totalCount = Int(countStr) ?? 0

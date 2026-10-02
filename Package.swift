@@ -1,63 +1,74 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
+// echo-libraries ships Apple-only binary frameworks; on Linux SwiftPM must not even fetch it (its
+// binary download crashes there), so the dependency and its products exist on macOS only.
+#if os(macOS)
+let echoLibraries: [Package.Dependency] = [.package(url: "https://github.com/tashda/echo-libraries", from: "1.1.0")]
+let libpqProducts: [Target.Dependency] = [.product(name: "CLibpq", package: "echo-libraries")]
+let securityProducts: [Target.Dependency] = [
+    .product(name: "EchoTLS", package: "echo-libraries"),
+    .product(name: "EchoKerberos", package: "echo-libraries"),
+]
+#else
+let echoLibraries: [Package.Dependency] = []
+let libpqProducts: [Target.Dependency] = []
+let securityProducts: [Target.Dependency] = []
+#endif
+
 let package = Package(
-    name: "postgres-wire",
-    platforms: [ .macOS(.v13) ],
+    name: "echo-postgres",
+    platforms: [ .macOS(.v26) ],
     products: [
-        .library(name: "PostgresWire", targets: ["PostgresWire"]),
         .library(name: "PostgresKit", targets: ["PostgresKit"]),
-        .library(name: "PostgresKitTesting", targets: ["PostgresKitTesting"]),
-        .executable(name: "postgres-test-fixture", targets: ["PostgresFixtureTool"])
+        .library(name: "PostgresKitTesting", targets: ["PostgresKitTesting"])
     ],
     dependencies: [
-        .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.29.0"),
+        // libpq (macOS: universal frameworks built by echo-libraries; Linux: the system's libpq),
+        // and on macOS the Keychain trust, client certificates and Kerberos ticket (EchoTLS, EchoKerberos).
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.0"),
-        .package(url: "https://github.com/apple/swift-metrics.git", from: "2.3.0"),
-        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.5")
-    ],
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.9.0" ..< "5.0.0"),
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin", from: "1.4.5"),
+    ] + echoLibraries,
     targets: [
+        // The system's libpq on Linux (libpq-dev, PostgreSQL 17+ for chunked rows).
+        .systemLibrary(
+            name: "CLibpqSystem",
+            pkgConfig: "libpq",
+            providers: [.apt(["libpq-dev"]), .yum(["libpq-devel"])]
+        ),
+        // The libpq transport: the only code that calls libpq. Each connection is an actor running
+        // on its own serial queue, woken by socket readiness (no thread ever blocks).
         .target(
-            name: "PostgresWire",
-            dependencies: [
-                .product(name: "PostgresNIO", package: "postgres-nio"),
-                .product(name: "Logging", package: "swift-log")
+            name: "PGLibpq",
+            dependencies: libpqProducts + [
+                .target(name: "CLibpqSystem", condition: .when(platforms: [.linux])),
             ]
         ),
         .target(
             name: "PostgresKit",
             dependencies: [
-                "PostgresWire",
+                "PGLibpq",
+                .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "Metrics", package: "swift-metrics")
-            ]
+            ] + securityProducts
         ),
         .target(
             name: "PostgresKitTesting",
             dependencies: ["PostgresKit"]
         ),
-        .executableTarget(
-            name: "PostgresFixtureTool",
-            dependencies: ["PostgresKitTesting"],
-            path: "Sources/PostgresFixtureTool"
-        ),
         .testTarget(
-            name: "PostgresWireTests",
-            dependencies: [
-                "PostgresWire",
-                .product(name: "PostgresNIO", package: "postgres-nio")
-            ],
-            path: "Tests/PostgresWireTests"
+            name: "PGLibpqTests",
+            dependencies: ["PGLibpq"]
         ),
         .testTarget(
             name: "PostgresKitTests",
             dependencies: [
                 "PostgresKit",
                 "PostgresKitTesting",
-                .product(name: "PostgresNIO", package: "postgres-nio")
             ],
             path: "Tests/PostgresKitTests",
-            exclude: ["README.md", "Support/SampleData.sql", "Support/PostgresDockerManager.swift"]
+            exclude: ["README.md", "Support/SampleData.sql", "Support/certificates"]
         )
     ]
 )

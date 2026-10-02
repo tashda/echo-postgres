@@ -1,7 +1,6 @@
-import PostgresWire
 
 /// Query plan analysis operations.
-public extension PostgresConnectionClient {
+public extension PostgresExecutionPlanClient {
     /// Run EXPLAIN on a query and return the plan as an array of strings.
     func explain(
         _ query: String,

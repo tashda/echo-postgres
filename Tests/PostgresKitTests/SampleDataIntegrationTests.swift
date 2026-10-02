@@ -24,7 +24,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     // MARK: - Schemas
 
     func testAllSchemasExist() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT schema_name FROM information_schema.schemata")
+        let rows = try await client.simpleQuery("SELECT schema_name FROM information_schema.schemata")
         var schemas: [String] = []
         for try await s in rows.decode(String.self) { schemas.append(s) }
         for expected in ["public", "app", "audit", "archive"] {
@@ -35,7 +35,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     // MARK: - Extensions
 
     func testRequiredExtensionsInstalled() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT extname FROM pg_extension")
+        let rows = try await client.simpleQuery("SELECT extname FROM pg_extension")
         var exts: [String] = []
         for try await e in rows.decode(String.self) { exts.append(e) }
         for expected in ["uuid-ossp", "hstore", "ltree", "citext"] {
@@ -46,7 +46,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     // MARK: - Custom Types
 
     func testEnumTypesExist() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT typname FROM pg_type WHERE typtype = 'e' ORDER BY typname")
+        let rows = try await client.simpleQuery("SELECT typname FROM pg_type WHERE typtype = 'e' ORDER BY typname")
         var enums: [String] = []
         for try await e in rows.decode(String.self) { enums.append(e) }
         XCTAssertTrue(enums.contains("mood"))
@@ -55,14 +55,14 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     }
 
     func testCompositeTypeExists() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT typname FROM pg_type WHERE typtype = 'c' AND typname = 'address_type'")
+        let rows = try await client.simpleQuery("SELECT typname FROM pg_type WHERE typtype = 'c' AND typname = 'address_type'")
         var found = false
         for try await _ in rows { found = true }
         XCTAssertTrue(found, "address_type composite type should exist")
     }
 
     func testDomainTypesExist() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT typname FROM pg_type WHERE typtype = 'd' AND typname IN ('positive_integer', 'email_address', 'percentage')")
+        let rows = try await client.simpleQuery("SELECT typname FROM pg_type WHERE typtype = 'd' AND typname IN ('positive_integer', 'email_address', 'percentage')")
         var domains: [String] = []
         for try await d in rows.decode(String.self) { domains.append(d) }
         XCTAssertEqual(domains.count, 3, "Should have 3 domain types")
@@ -75,7 +75,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
                       "array_types", "network_types", "geometric_types", "binary_types",
                       "range_types", "fulltext_types", "special_types", "all_data_types"]
         for table in tables {
-            let rows = try await client.connection.simpleQuery("SELECT count(*) FROM public.\(table)")
+            let rows = try await client.simpleQuery("SELECT count(*) FROM public.\(table)")
             var count: Int64 = 0
             for try await c in rows.decode(Int64.self) { count = c }
             XCTAssertGreaterThan(count, 0, "Table public.\(table) should have data")
@@ -89,7 +89,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
             ("orders", 3), ("order_items", 4)
         ]
         for (table, minCount) in tables {
-            let rows = try await client.connection.simpleQuery("SELECT count(*) FROM app.\(table)")
+            let rows = try await client.simpleQuery("SELECT count(*) FROM app.\(table)")
             var count: Int64 = 0
             for try await c in rows.decode(Int64.self) { count = c }
             XCTAssertGreaterThanOrEqual(count, minCount, "app.\(table) should have >= \(minCount) rows")
@@ -101,7 +101,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     func testViewsAreQueryable() async throws {
         let views = ["app.active_users", "app.published_posts", "app.post_statistics"]
         for view in views {
-            let rows = try await client.connection.simpleQuery("SELECT count(*) FROM \(view)")
+            let rows = try await client.simpleQuery("SELECT count(*) FROM \(view)")
             var count: Int64 = 0
             for try await c in rows.decode(Int64.self) { count = c }
             XCTAssertGreaterThanOrEqual(count, 0, "View \(view) should be queryable")
@@ -109,7 +109,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     }
 
     func testMaterializedViewIsQueryable() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT count(*) FROM app.user_activity_summary")
+        let rows = try await client.simpleQuery("SELECT count(*) FROM app.user_activity_summary")
         var count: Int64 = 0
         for try await c in rows.decode(Int64.self) { count = c }
         XCTAssertGreaterThan(count, 0, "Materialized view should have data")
@@ -121,7 +121,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
         let functions = ["update_updated_at", "update_post_search_vector", "update_tag_count",
                          "increment_login_count", "get_user_posts", "merge_jsonb_settings"]
         for fn in functions {
-            let rows = try await client.connection.simpleQuery("SELECT proname FROM pg_proc WHERE proname = '\(fn)'")
+            let rows = try await client.simpleQuery("SELECT proname FROM pg_proc WHERE proname = '\(fn)'")
             var found = false
             for try await _ in rows { found = true }
             XCTAssertTrue(found, "Function \(fn) should exist")
@@ -129,7 +129,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     }
 
     func testAuditLogFunctionExists() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'audit' AND p.proname = 'log_change'")
+        let rows = try await client.simpleQuery("SELECT proname FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = 'audit' AND p.proname = 'log_change'")
         var found = false
         for try await _ in rows { found = true }
         XCTAssertTrue(found, "audit.log_change() function should exist")
@@ -147,7 +147,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
             ("trg_posts_audit", "posts")
         ]
         for (trigName, tableName) in triggers {
-            let rows = try await client.connection.simpleQuery(
+            let rows = try await client.simpleQuery(
                 "SELECT tgname FROM pg_trigger t JOIN pg_class c ON t.tgrelid = c.oid WHERE tgname = '\(trigName)' AND c.relname = '\(tableName)'"
             )
             var found = false
@@ -159,7 +159,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     // MARK: - Roles
 
     func testTestRolesExist() async throws {
-        let rows = try await client.connection.simpleQuery("SELECT rolname FROM pg_roles WHERE rolname LIKE 'test_%'")
+        let rows = try await client.simpleQuery("SELECT rolname FROM pg_roles WHERE rolname LIKE 'test_%'")
         var roles: [String] = []
         for try await r in rows.decode(String.self) { roles.append(r) }
         XCTAssertTrue(roles.contains("test_readonly"))
@@ -170,7 +170,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     // MARK: - Sequences
 
     func testSequencesExist() async throws {
-        let rows = try await client.connection.simpleQuery(
+        let rows = try await client.simpleQuery(
             "SELECT sequencename FROM pg_sequences WHERE schemaname = 'app' AND sequencename IN ('invoice_number_seq', 'ticket_number_seq')"
         )
         var seqs: [String] = []
@@ -182,7 +182,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     // MARK: - Complex Queries
 
     func testMultiTableJoin() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT u.username, p.title, COUNT(c.id) AS comment_count
             FROM app.users u
             JOIN app.posts p ON p.author_id = u.id
@@ -197,7 +197,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     }
 
     func testCTEQuery() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             WITH user_stats AS (
                 SELECT u.id, u.username,
                        COUNT(DISTINCT p.id) AS posts,
@@ -215,7 +215,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     }
 
     func testWindowFunctionQuery() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT title, view_count,
                    RANK() OVER (ORDER BY view_count DESC) AS view_rank,
                    SUM(view_count) OVER () AS total_views
@@ -228,7 +228,7 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     }
 
     func testSubqueryWithExists() async throws {
-        let rows = try await client.connection.simpleQuery("""
+        let rows = try await client.simpleQuery("""
             SELECT u.username FROM app.users u
             WHERE EXISTS (
                 SELECT 1 FROM app.posts p WHERE p.author_id = u.id AND p.status = 'delivered'
@@ -242,14 +242,12 @@ final class SampleDataIntegrationTests: PostgresKitTestCase {
     // MARK: - Comments
 
     func testTableComments() async throws {
-        let meta = PostgresMetadata()
-        let comment = try await meta.fetchTableComment(using: client, schema: "app", table: "users")
+        let comment = try await client.metadata.fetchTableComment(schema: "app", table: "users")
         XCTAssertEqual(comment, "Core user accounts table")
     }
 
     func testColumnComments() async throws {
-        let meta = PostgresMetadata()
-        let comments = try await meta.fetchColumnComments(using: client, schema: "app", table: "users")
+        let comments = try await client.metadata.fetchColumnComments(schema: "app", table: "users")
         let metadataComment = comments.first { $0.column == "metadata" }
         XCTAssertNotNil(metadataComment, "metadata column should have a comment")
     }

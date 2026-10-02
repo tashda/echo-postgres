@@ -1,15 +1,17 @@
-import PostgresWire
 
 /// High-level Type Data Definition Language (DDL) operations.
-public extension PostgresAdminClient {
+public extension PostgresTypeClient {
     /// Create a new enum type.
     @discardableResult
-    func createEnum(name: String, values: [String], ifNotExists: Bool = false) async throws -> Int {
+    ///
+    /// PostgreSQL has no `CREATE TYPE IF NOT EXISTS`; with `ifNotExists` an existing type of the
+    /// same name is left alone and 0 is returned.
+    func createEnum(name: String, schema: String? = nil, values: [String], ifNotExists: Bool = false) async throws -> Int {
+        if ifNotExists, try await typeExists(name: name, schema: schema) { return 0 }
         var parts: [String] = ["CREATE TYPE"]
-        if ifNotExists { parts.append("IF NOT EXISTS") }
-        parts.append(client.quoteIdentifier(name))
+        parts.append(client.quoteQualified(name, schema: schema))
         parts.append("AS ENUM")
-        let valueList = values.map { "'\($0.replacingOccurrences(of: "'", with: "''"))'" }.joined(separator: ", ")
+        let valueList = values.map(PostgresQuoting.quoteLiteral).joined(separator: ", ")
         parts.append("(\(valueList))")
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -29,11 +31,11 @@ public extension PostgresAdminClient {
     func addEnumValue(type: String, value: String, before: String? = nil, after: String? = nil) async throws -> Int {
         var parts: [String] = ["ALTER TYPE"]
         parts.append(client.quoteIdentifier(type))
-        parts.append("ADD VALUE '\(value.replacingOccurrences(of: "'", with: "''"))'")
+        parts.append("ADD VALUE \(PostgresQuoting.quoteLiteral(value))")
         if let before {
-            parts.append("BEFORE '\(before.replacingOccurrences(of: "'", with: "''"))'")
+            parts.append("BEFORE \(PostgresQuoting.quoteLiteral(before))")
         } else if let after {
-            parts.append("AFTER '\(after.replacingOccurrences(of: "'", with: "''"))'")
+            parts.append("AFTER \(PostgresQuoting.quoteLiteral(after))")
         }
         return try await client.executeDDL(parts.joined(separator: " "))
     }
@@ -41,7 +43,7 @@ public extension PostgresAdminClient {
     /// Rename an existing value in an enum type.
     @discardableResult
     func renameEnumValue(type: String, oldValue: String, newValue: String) async throws -> Int {
-        let sql = "ALTER TYPE \(client.quoteIdentifier(type)) RENAME VALUE '\(oldValue.replacingOccurrences(of: "'", with: "''"))' TO '\(newValue.replacingOccurrences(of: "'", with: "''"))'"
+        let sql = "ALTER TYPE \(client.quoteIdentifier(type)) RENAME VALUE \(PostgresQuoting.quoteLiteral(oldValue)) TO \(PostgresQuoting.quoteLiteral(newValue))"
         return try await client.executeDDL(sql)
     }
 }

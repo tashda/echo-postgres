@@ -1,0 +1,175 @@
+name: CI
+
+# The tests find their servers through URL variables (TESTING.md). Unit tests run on every push;
+# integration tests run against a postgres service container per supported version, and the TLS,
+# standby and proxy setups are started with the same docker commands TESTING.md gives.
+# POSTGRES_TEST_REQUIRED=1 makes a missing variable fail instead of skip, so no job passes by skipping.
+
+on:
+  push:
+    branches: ["dev", "main"]
+  pull_request:
+    branches: ["main", "dev"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Pull requests cancel their older runs; pushes to dev queue, so each commit is checked on its own.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Suites that need a setup of their own; the plain integration jobs leave them to their jobs.
+  SPECIAL_SUITES: "TLSTests|KerberosTests|ProxyFailoverTests|StandbyTests"
+
+jobs:
+  unit:
+    name: "Unit tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libpq-dev
+      - run: swift --version
+      - name: Build
+        run: swift build --build-tests
+      - name: Unit tests (server tests are skipped without their URL)
+        run: swift test
+
+  integration:
+    name: "Integration (PostgreSQL ${{ matrix.version }})"
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["14", "15", "16", "17", "18"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.version }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -h 127.0.0.1"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      POSTGRES_TEST_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+      POSTGRES_TEST_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libpq-dev
+      - name: Integration tests
+        run: swift test --skip "$SPECIAL_SUITES"
+
+  tls:
+    name: "TLS (PostgreSQL 17)"
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POSTGRES_TEST_TLS_URL: "postgres://postgres:postgres@localhost:5433/postgres?sslmode=verify-full&sslrootcert=/tmp/pg-tls/ca.crt"
+      POSTGRES_TEST_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libpq-dev
+      - name: Start a server that requires TLS (as in TESTING.md)
+        run: |
+          mkdir -p /tmp/pg-tls && cd /tmp/pg-tls
+          openssl req -x509 -new -nodes -newkey rsa:2048 -days 30 -subj "/CN=echo-postgres test CA" -keyout ca.key -out ca.crt
+          openssl req -new -nodes -newkey rsa:2048 -subj "/CN=localhost" -keyout server.key -out server.csr
+          printf 'subjectAltName=DNS:localhost\n' > server.ext
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 30 -extfile server.ext -out server.crt
+          printf 'local all all trust\nhostssl all all all scram-sha-256\n' > pg_hba.conf
+          docker run -d --name postgres-tls -e POSTGRES_PASSWORD=postgres -p 5433:5432 -v "$PWD":/certs:ro postgres:17 bash -c \
+            'install -o postgres -m 600 /certs/server.key /tmp/server.key && install -o postgres -m 644 /certs/server.crt /tmp/server.crt &&
+             exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/server.crt -c ssl_key_file=/tmp/server.key -c hba_file=/certs/pg_hba.conf'
+          for i in $(seq 1 60); do docker exec postgres-tls pg_isready -U postgres -h 127.0.0.1 && break; sleep 1; done
+      - name: TLS tests
+        run: swift test --filter TLSTests
+
+  standby:
+    name: "Primary and standby (PostgreSQL 17)"
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POSTGRES_TEST_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+      POSTGRES_TEST_STANDBY_URL: "postgres://postgres:postgres@localhost:5434/postgres?sslmode=disable"
+      POSTGRES_TEST_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libpq-dev
+      - name: Start a primary and a standby (as in TESTING.md)
+        run: |
+          docker network create pg-pair
+          docker run -d --name pg-primary --network pg-pair -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
+          until docker exec pg-primary pg_isready -U postgres -h 127.0.0.1; do sleep 1; done
+          docker exec pg-primary bash -c 'echo "host replication all all scram-sha-256" >> "$PGDATA/pg_hba.conf"'
+          docker exec pg-primary psql -U postgres -c 'SELECT pg_reload_conf()'
+          docker run --rm --network pg-pair -v pg-standby:/var/lib/postgresql/data -e PGPASSWORD=postgres postgres:17 bash -c \
+            'pg_basebackup -h pg-primary -U postgres -D /var/lib/postgresql/data -R -X stream &&
+             chown -R postgres:postgres /var/lib/postgresql/data && chmod 700 /var/lib/postgresql/data'
+          docker run -d --name pg-standby --network pg-pair -v pg-standby:/var/lib/postgresql/data -p 5434:5432 postgres:17
+          for i in $(seq 1 60); do docker exec pg-primary psql -U postgres -Atc 'SELECT count(*) FROM pg_stat_replication' | grep -q 1 && break; sleep 1; done
+      - name: Standby tests
+        run: swift test --filter 'StandbyTests|PhysicalReplicationTests'
+
+  proxy:
+    name: "Failover through a proxy (PostgreSQL 17)"
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      POSTGRES_TEST_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+      POSTGRES_TEST_PROXY_URL: "postgres://postgres:postgres@localhost:6432/postgres?sslmode=disable"
+      POSTGRES_TEST_PROXY_CONTROL: "http://localhost:8474"
+      POSTGRES_TEST_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: libpq 18 and MIT Kerberos (system libraries on Linux)
+        run: |
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libkrb5-dev curl ca-certificates pkg-config
+          # libpq 17+ (chunked rows) from the PostgreSQL project's repository; Ubuntu 24.04 has 16.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq && sudo apt-get -o DPkg::Lock::Timeout=300 install -y -qq libpq-dev
+      - name: Start a server and a Toxiproxy in front of it (as in TESTING.md)
+        run: |
+          docker network create pg-proxy
+          docker run -d --name pg-server --network pg-proxy -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
+          docker run -d --name pg-toxiproxy --network pg-proxy -p 8474:8474 -p 6432:6432 ghcr.io/shopify/toxiproxy
+          until curl -s localhost:8474/version; do sleep 1; done
+          until docker exec pg-server pg_isready -U postgres -h 127.0.0.1; do sleep 1; done
+          curl -s -X POST localhost:8474/proxies -d '{"name":"postgres","listen":"0.0.0.0:6432","upstream":"pg-server:5432"}'
+      - name: Failover tests
+        run: swift test --filter ProxyFailoverTests
