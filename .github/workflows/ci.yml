@@ -1,4 +1,4 @@
-name: "Tests"
+name: CI
 
 # The tests find their servers through URL variables (TESTING.md). Unit tests run on every push;
 # integration tests run against a postgres service container per supported version, and the TLS,

@@ -89,7 +89,7 @@ struct KerberosTests {
 
 /// Points the process at the URL's Kerberos settings and makes sure it has a ticket for the user.
 enum KerberosSetup {
-    private static let cache = FileManager.default.temporaryDirectory.appendingPathComponent("postgres-wire-krb5cc-\(getpid())").path
+    private static let cache = FileManager.default.temporaryDirectory.appendingPathComponent("echo-postgres-krb5cc-\(getpid())").path
 
     static func ready() -> Bool {
         guard let server = TestServer.url("POSTGRES_TEST_KERBEROS_URL") else { return TestServer.isRequired() }

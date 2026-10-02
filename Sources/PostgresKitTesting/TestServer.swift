@@ -136,7 +136,7 @@ extension TestServer {
             password: usesKerberos ? nil : password,
             sslMode: try sslMode(query["sslmode"] ?? "prefer"),
             sslRootCertPath: query["sslrootcert"], sslCertPath: query["sslcert"], sslKeyPath: query["sslkey"],
-            applicationName: query["application_name"] ?? "postgres-wire tests",
+            applicationName: query["application_name"] ?? "echo-postgres tests",
             connectTimeout: query["connect_timeout"].flatMap(Int.init) ?? 10,
             targetSessionAttributes: try query["target_session_attrs"].map(targetSessionAttributes) ?? .any,
             loadBalanceHosts: query["load_balance_hosts"] == "random"

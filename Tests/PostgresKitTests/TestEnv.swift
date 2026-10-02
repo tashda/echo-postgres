@@ -29,7 +29,7 @@ enum TestEnv {
         database: String? = nil,
         username: String? = nil,
         password: String? = nil,
-        applicationName: String? = "postgres-wire-tests",
+        applicationName: String? = "echo-postgres-tests",
         pool: PostgresPoolConfiguration = .init(),
         statementTimeout: Duration? = nil
     ) -> PostgresConfiguration {

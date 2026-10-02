@@ -118,6 +118,6 @@ On Linux, building needs MIT Kerberos (`libkrb5-dev`).
 
 ## CI
 
-`.github/workflows/test.yml` runs the unit tests on every push, the integration tests against a
+`.github/workflows/ci.yml` runs the unit tests on every push, the integration tests against a
 `postgres` service container for each of 14 to 18, and the TLS, standby and proxy setups above, each
 with its URL variables and `POSTGRES_TEST_REQUIRED=1`.
