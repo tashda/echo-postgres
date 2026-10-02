@@ -41,8 +41,8 @@ jobs:
       - name: "📝 Generating Release Notes"
         run: |
           python3 .github/scripts/generate_release_notes.py \
-            --repo-key postgres-wire \
-            --repo-name postgres-wire \
+            --repo-key echo-postgres \
+            --repo-name echo-postgres \
             --new-tag "${{ steps.version.outputs.tag }}" \
             --previous-tag "${{ steps.version.outputs.previous_tag }}" \
             --output release-notes.md

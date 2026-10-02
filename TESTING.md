@@ -1,4 +1,4 @@
-# Testing postgres-wire
+# Testing echo-postgres
 
 The unit tests need nothing. The integration tests need a PostgreSQL server, which they find
 through **one URL variable per setup**. A test whose variable is not set is skipped, and the skip
@@ -52,7 +52,7 @@ A server with a certificate from a CA of its own, accepting only TLS connections
 
 ```bash
 mkdir -p /tmp/pg-tls && cd /tmp/pg-tls
-openssl req -x509 -new -nodes -newkey rsa:2048 -days 30 -subj "/CN=postgres-wire test CA" -keyout ca.key -out ca.crt
+openssl req -x509 -new -nodes -newkey rsa:2048 -days 30 -subj "/CN=echo-postgres test CA" -keyout ca.key -out ca.crt
 openssl req -new -nodes -newkey rsa:2048 -subj "/CN=localhost" -keyout server.key -out server.csr
 printf 'subjectAltName=DNS:localhost\n' > server.ext
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 30 -extfile server.ext -out server.crt

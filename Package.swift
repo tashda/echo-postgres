@@ -17,7 +17,7 @@ let securityProducts: [Target.Dependency] = []
 #endif
 
 let package = Package(
-    name: "postgres-wire",
+    name: "echo-postgres",
     platforms: [ .macOS(.v26) ],
     products: [
         .library(name: "PostgresKit", targets: ["PostgresKit"]),

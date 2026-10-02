@@ -47,7 +47,7 @@ jobs:
             generate-documentation --target PostgresKit \
             --disable-indexing \
             --transform-for-static-hosting \
-            --hosting-base-path postgres-wire \
+            --hosting-base-path echo-postgres \
             --output-path ./docs
 
       - name: Setup Pages

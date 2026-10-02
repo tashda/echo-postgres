@@ -40,12 +40,12 @@ framework with OpenSSL and the PostgreSQL tools) and from the system on Linux.
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/tashda/postgres-wire.git", branch: "dev")
+    .package(url: "https://github.com/tashda/echo-postgres.git", branch: "dev")
 ]
 ```
 
 ```swift
-.target(name: "YourApp", dependencies: [.product(name: "PostgresKit", package: "postgres-wire")])
+.target(name: "YourApp", dependencies: [.product(name: "PostgresKit", package: "echo-postgres")])
 ```
 
 ## Usage

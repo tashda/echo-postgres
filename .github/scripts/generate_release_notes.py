@@ -24,7 +24,7 @@ REPO_CATEGORIES: dict[str, list[Category]] = {
         Category("CI & Release", (".github/", "Package.swift", "scripts/")),
         Category("Documentation", ("README", "TEST_FIXTURES.md", "CHANGELOG", "docs/")),
     ],
-    "postgres-wire": [
+    "echo-postgres": [
         Category("Wire Protocol", ("Sources/PostgresWire/", "Tests/PostgresWireTests/")),
         Category("Client APIs", ("Sources/PostgresKit/",)),
         Category("Testing & Fixtures", ("Sources/PostgresKitTesting/", "Sources/PostgresFixtureTool/", "Tests/PostgresKitTests/")),
