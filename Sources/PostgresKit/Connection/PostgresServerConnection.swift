@@ -123,6 +123,14 @@ public final class PostgresServerConnection: Sendable {
         }
     }
 
+    /// Closes and forgets the cached client for `database`, so a server with many databases does not keep one
+    /// connection open for each (PostgreSQL's default allows 100 clients). The primary client stays. A later
+    /// ``client(for:)`` connects again.
+    public func releaseClient(for database: String) async {
+        guard database.lowercased() != connectedDatabase.lowercased() else { return }
+        await clients.release(database)
+    }
+
     /// Open a dedicated ``PostgresSessionConnection`` (not pooled) to `database` with this server's
     /// settings — for query tabs and anything else that needs transactions or session state.
     public func makeSession(
@@ -184,6 +192,10 @@ private actor ClientCache {
             pending[key] = nil
             throw error
         }
+    }
+
+    func release(_ database: String) {
+        cached.removeValue(forKey: database.lowercased())?.close()
     }
 
     func closeAll() {

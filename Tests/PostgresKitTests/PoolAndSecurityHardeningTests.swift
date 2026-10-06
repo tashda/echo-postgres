@@ -100,6 +100,24 @@ final class PoolAndSecurityHardeningTests: PostgresKitTestCase {
         XCTAssertGreaterThan(session.backendPID, 0)
     }
 
+    func testReleasedClientIsClosedAndReplacedOnNextRequest() async throws {
+        let server = try await PostgresServerConnection.connect(configuration: TestEnv.configuration(), logger: logger)
+        defer { Task { await server.closeAll() } }
+        let first = try await server.client(for: "template1")
+        let same = try await server.client(for: "template1")
+        XCTAssertTrue(first === same)
+
+        await server.releaseClient(for: "template1")
+        let second = try await server.client(for: "template1")
+        XCTAssertFalse(first === second, "a released database connects again with a new client")
+        let value = try await scalar(second, "SELECT current_database()")
+        XCTAssertEqual(value, "template1")
+
+        await server.releaseClient(for: server.connectedDatabase)
+        let primary = try await server.client(for: server.connectedDatabase)
+        XCTAssertTrue(primary === server.primaryClient, "the primary client is never released")
+    }
+
     // MARK: - Errors
 
     func testErrorsCarryPositionHintAndDetail() async throws {
